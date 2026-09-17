@@ -1,7 +1,6 @@
 # Air Quality Observatory
 
-A Django platform for PEACE-Air Work Package 2. It downloads AirCasting sensor recordings
-(using the logic of `AirCasting_Download_AIRBEAM3_B0B21C7627C4.ipynb`), stores them as
+A Django platform for PEACE-Air Work Package 2. It downloads AirCasting sensor recordings stores them as
 structured CSV files, lets you explore them on a map with time-series and statistical
 views, and collects citizen feedback through a public survey.
 
