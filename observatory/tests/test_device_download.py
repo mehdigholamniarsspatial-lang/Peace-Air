@@ -1,9 +1,12 @@
 import tempfile
 from datetime import date, datetime, timedelta
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -300,3 +303,117 @@ class SensorListTests(TestCase):
 
                 device.refresh_from_db()
                 self.assertIn("HTTP 429", device.last_error)
+
+
+class DuplicateSensorTests(TestCase):
+    """One sensor, registered once.
+
+    ``device_id`` is unique only as written, but AirCasting spells one sensor several
+    ways. A second registration under a second spelling would be downloaded twice into
+    the same station, because imports resolve by hardware address — so registering is
+    refused with an instruction rather than allowed to make a twin.
+    """
+    EXISTING = "AIRBEAM3:B0B21C7627C4"
+    SAME_HARDWARE = ["AIRBEAM3:B0B21C7627C4", "airbeam3:b0b21c7627c4", "AirBeam3-b0b21c7627c4",
+                     "AirBeam3-B0B21C7627C4"]
+
+    def setUp(self):
+        self.client.force_login(get_user_model().objects.create_superuser("admin", password="test"))
+        self.device = AirCastingDevice.objects.create(device_id=self.EXISTING, download_from=date(2026, 2, 1))
+
+    def _post(self, device_id, **extra):
+        data = {"device_id": device_id, "label": "", "known_session_ids": "", "project_tags": "",
+                "download_from": "2026-02-01", "download_until": "", "station": "", "active": "on"}
+        data.update(extra)
+        return self.client.post(reverse("device_add"), data)
+
+    def message(self, response):
+        return " ".join(str(m) for m in response.wsgi_request._messages)
+
+    def test_every_spelling_of_the_same_sensor_is_refused(self):
+        for spelling in self.SAME_HARDWARE:
+            with self.subTest(spelling=spelling), patch("observatory.views.download_device_in_background") as started:
+                response = self._post(spelling)
+                self.assertRedirects(response, reverse("data"))
+                self.assertEqual(AirCastingDevice.objects.count(), 1, spelling)
+                started.assert_not_called()
+
+    def test_the_message_says_it_exists_and_what_to_do(self):
+        with patch("observatory.views.download_device_in_background"):
+            message = self.message(self._post(self.EXISTING))
+        self.assertIn("already registered", message)
+        self.assertIn("Remove the existing sensor before adding it again", message)
+        # Removing a sensor is not free, and the person is about to be told to do it.
+        self.assertIn("stored readings", message)
+
+    def test_a_different_spelling_is_told_which_sensor_it_matched(self):
+        with patch("observatory.views.download_device_in_background"):
+            message = self.message(self._post("AirBeam3-b0b21c7627c4"))
+        self.assertIn(f"is the same sensor as {self.EXISTING}", message)
+
+    def test_django_s_own_unique_message_is_not_added_beside_it(self):
+        with patch("observatory.views.download_device_in_background"):
+            message = self.message(self._post(self.EXISTING))
+        self.assertNotIn("already exists", message)
+        self.assertEqual(message.count("already registered"), 1)
+
+    def test_a_different_sensor_is_still_accepted(self):
+        with patch("observatory.views.download_device_in_background", return_value=True) as started:
+            response = self._post("AIRBEAM3:AABBCCDDEEFF")
+        self.assertRedirects(response, reverse("data"))
+        self.assertEqual(AirCastingDevice.objects.count(), 2)
+        started.assert_called_once()
+
+    def test_removing_it_lets_it_be_added_again(self):
+        """The instruction in the message has to actually work."""
+        with tempfile.TemporaryDirectory() as store, override_settings(OBSERVATORY_DATA_DIR=Path(store)):
+            self.client.post(reverse("device_delete", args=[self.device.pk]))
+        self.assertFalse(AirCastingDevice.objects.exists())
+        with patch("observatory.views.download_device_in_background", return_value=True) as started:
+            self._post(self.EXISTING)
+        self.assertEqual(AirCastingDevice.objects.get().device_id, self.EXISTING)
+        started.assert_called_once()
+
+    def test_the_admin_cannot_register_a_twin_either(self):
+        """The Data manager is not the only door: the admin builds its own ModelForm, so
+        the check lives on the model where ``full_clean`` will find it."""
+        twin = AirCastingDevice(device_id="AirBeam3-b0b21c7627c4", download_from=date(2026, 2, 1))
+        with self.assertRaises(ValidationError) as caught:
+            twin.full_clean()
+        self.assertIn("device_id", caught.exception.error_dict)
+        self.assertIn("already registered", caught.exception.messages[0])
+
+    def test_editing_the_sensor_that_already_exists_is_not_a_duplicate(self):
+        self.device.label = "Roof unit"
+        self.device.full_clean()   # must not object to itself
+
+    def test_an_identifier_with_no_hardware_address_falls_back_to_its_own_spelling(self):
+        AirCastingDevice.objects.create(device_id="SENSOR-ONE", download_from=date(2026, 2, 1))
+        self.assertIsNotNone(AirCastingDevice.registered_as("sensor-one"))
+        self.assertIsNone(AirCastingDevice.registered_as("SENSOR-TWO"))
+
+
+class AddDeviceCommandTests(TestCase):
+    """``fetch_aircasting --add-device`` means "make sure this is registered", so it reuses
+    an existing sensor rather than failing — but it must reuse it across spellings too,
+    and say so when the spelling it was given is not the one on file."""
+
+    def run_add(self, device_id):
+        out = StringIO()
+        with patch("observatory.management.commands.fetch_aircasting.run_sync", return_value=None):
+            call_command("fetch_aircasting", add_device=device_id, stdout=out, stderr=out)
+        return out.getvalue()
+
+    def test_a_second_spelling_reuses_the_registered_sensor(self):
+        self.assertIn("Registered", self.run_add("AIRBEAM3:B0B21C7627C4"))
+        output = self.run_add("AirBeam3-b0b21c7627c4")
+        self.assertEqual(AirCastingDevice.objects.count(), 1)
+        self.assertIn("is the same sensor as AIRBEAM3:B0B21C7627C4", output)
+        self.assertIn("Using AIRBEAM3:B0B21C7627C4", output)
+
+    def test_the_same_spelling_is_quietly_reused(self):
+        self.run_add("AIRBEAM3:B0B21C7627C4")
+        output = self.run_add("AIRBEAM3:B0B21C7627C4")
+        self.assertEqual(AirCastingDevice.objects.count(), 1)
+        self.assertNotIn("same sensor", output)
+        self.assertIn("Using", output)

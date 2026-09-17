@@ -30,6 +30,7 @@ body { margin: 0; font-family: var(--font); font-size: 15px; line-height: 1.45; 
 a { color: var(--teal-strong); }
 button, input, select { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+[hidden] { display: none !important; }
 .visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* ---------- shell */
@@ -168,7 +169,7 @@ table.data input[type="checkbox"] { width: 18px; height: 18px; accent-color: var
 
 /* ---------- map */
 /* Search, measurement and aggregation. The period is set on the chart itself. */
-.map-toolbar { display: grid; grid-template-columns: minmax(220px, 2fr) auto minmax(150px, 1fr) auto minmax(170px, 1fr); gap: 12px; align-items: center; padding: 10px 12px; margin-bottom: 14px; }
+.map-toolbar { display: grid; grid-template-columns: minmax(200px, 2fr) auto minmax(140px, 1fr) auto minmax(160px, 1fr) auto auto; gap: 12px; align-items: center; padding: 10px 12px; margin-bottom: 14px; }
 .map-toolbar label.inline { font-size: 14px; color: var(--ink-2); white-space: nowrap; }
 .explorer { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(360px, 1fr); gap: 14px; }
 .map-card { position: relative; overflow: hidden; min-height: 640px; }
@@ -208,6 +209,32 @@ table.data input[type="checkbox"] { width: 18px; height: 18px; accent-color: var
 .pop-link { font-weight: 600; text-decoration: none; }
 .station-label { background: transparent; border: 0; box-shadow: none; font-weight: 600; font-size: 14px; color: var(--ink); text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
 .station-label::before { display: none; }
+
+/* ---------- sensor track (mobile recordings)
+   The map card keeps its furniture in the corners, so a visible track bar lifts the
+   zoom control, the scale and the "without coordinates" note clear of it. */
+.track-legend { position: absolute; top: 14px; right: 14px; z-index: 500; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; font-size: 13px; box-shadow: var(--shadow); max-width: 200px; }
+.track-legend-head { font-weight: 600; margin-bottom: 6px; }
+.track-legend ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.track-legend li { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.track-legend li i { width: 14px; height: 10px; border-radius: 2px; flex: none; }
+.track-legend #track-note { margin-top: 6px; white-space: normal; }
+
+.track-bar { position: absolute; left: 14px; right: 14px; bottom: 12px; z-index: 500; display: flex; align-items: center; gap: 10px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 7px 12px; box-shadow: var(--shadow); }
+.track-bar .play { width: 32px; height: 32px; }
+.track-bar-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; }
+.track-readout { flex: none; display: flex; gap: 10px; font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.track-readout #track-value { font-weight: 600; color: var(--ink); }
+.select-sm { height: 30px; font-size: 13px; padding: 0 28px 0 10px; max-width: 170px; background-position: right 10px center; }
+.scrub { flex: 1; min-width: 60px; margin: 0; accent-color: var(--teal); height: 20px; }
+
+.map-card.has-track .leaflet-bottom.leaflet-right,
+.map-card.has-track .leaflet-bottom.leaflet-left { bottom: 66px; }
+.map-card.has-track .unplaced { bottom: 72px; }
+
+.track-dot { cursor: pointer; }
+.track-cursor { pointer-events: none; }
+.track-tip { font-variant-numeric: tabular-nums; }
 
 /* ---------- analysis */
 .filters { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(240px, 1fr) auto; gap: 26px; padding: 14px 18px; margin: 14px 0; align-items: end; }
@@ -300,6 +327,7 @@ table.data input[type="checkbox"] { width: 18px; height: 18px; accent-color: var
 /* ---------- responsive */
 @media (max-width: 1280px) {
   .map-toolbar { grid-template-columns: 1fr 1fr 1fr; }
+  .track-legend { max-width: 150px; font-size: 12px; }
   .map-toolbar label.inline { display: none; }
   .stats-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .dm-top { grid-template-columns: 1fr 1fr; }

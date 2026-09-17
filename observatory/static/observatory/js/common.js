@@ -48,6 +48,8 @@
       return new Date(ms).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
     },
     time(ms) { return new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" }); },
+    // Seconds matter for a track: a mobile sensor reports one reading per second.
+    clock(ms) { return new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "UTC" }); },
     range(startMs, endMsExclusive) {
       const a = new Date(startMs), b = new Date(endMsExclusive - 1);
       if (a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10)) return fmt.day(startMs, true);

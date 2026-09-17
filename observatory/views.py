@@ -14,6 +14,7 @@ from .about_content import load_about_content
 from .forms import DeviceForm, StationLocationForm, SurveyForm
 from . import survey
 from .models import AirCastingDevice, ImportRun, ScheduleConfig, Station, SurveyContact, SurveyResponse
+from .services import region
 from .services.sync import build_config, download_device_in_background
 from .services.deletion import delete_device_and_data, delete_station_and_data
 
@@ -54,6 +55,7 @@ def data_manager(request):
     """
     return render(request, "observatory/data_manager.html", {
         "nav": "data",
+        "region_name": region.name(),
         "regions": Station.objects.exclude(region="").order_by().values_list("region", flat=True).distinct(),
         "default_region": settings.OBSERVATORY_DEFAULT_REGION,
         "schedule": ScheduleConfig.load(),

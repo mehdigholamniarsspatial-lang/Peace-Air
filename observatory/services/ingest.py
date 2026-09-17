@@ -1,14 +1,19 @@
 """Read sensor CSV files, normalise them and write them into station storage.
 
-Two input layouts are accepted:
+Three input layouts are accepted:
 
 * **AirCasting export** – the 18 columns written by the notebook / downloader
   (``device_group, session_id, stream_id, sensor_name, source_time, value, latitude, ...``).
+* **AirCasting session export** – the per-session CSV the aircasting.org map offers for a
+  mobile recording: one row per GPS fix, one column per measured channel, under a block
+  of paired metadata rows. :func:`read_session_export` folds it back into the layout
+  above, so nothing downstream has to know this shape exists.
 * **Simple long format** – ``station, time, measurement, value`` plus optional
   ``station_name, unit, latitude, longitude, region``. Useful for other sensor networks.
 """
 from __future__ import annotations
 
+import csv
 import logging
 import re
 from dataclasses import dataclass, field
@@ -22,7 +27,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from ..models import Dataset, DeviceAlias, ImportRun, Station
-from . import storage, units
+from . import region, storage, units
 
 log = logging.getLogger("observatory.ingest")
 
@@ -30,6 +35,15 @@ AIRCASTING_REQUIRED = {"sensor_name", "value"}
 SIMPLE_REQUIRED = {"station", "time", "measurement", "value"}
 
 MEASUREMENT_LABELS = {"F": "Temperature", "C": "Temperature", "RH": "Humidity"}
+
+# The session export spells its units out in words; everything else here uses symbols.
+SPELLED_UNITS = {
+    "micrograms per cubic meter": "µg/m³", "micrograms per cubic metre": "µg/m³",
+    "degrees fahrenheit": "F", "degrees celsius": "°C", "degrees centigrade": "°C",
+    "percent": "%", "parts per billion": "ppb", "parts per million": "ppm", "decibels": "dB",
+}
+# How far into a file to look for the session export’s real header row.
+SESSION_HEADER_SCAN = 40
 
 
 class IngestError(ValueError):
@@ -42,6 +56,7 @@ class IngestResult:
     rows_stored: int = 0
     rows_duplicate: int = 0
     rows_rejected: int = 0
+    rows_outside_region: int = 0
     stations: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -57,6 +72,129 @@ def measurement_key(sensor_name: str) -> str:
 
 def measurement_label(key: str, measurement_type: str = "") -> str:
     return MEASUREMENT_LABELS.get(key, key if key.upper().startswith("PM") else (measurement_type or key))
+
+
+def normalise_unit(unit: str) -> str:
+    """``micrograms per cubic meter`` -> ``µg/m³``; a symbol is returned unchanged."""
+    return SPELLED_UNITS.get(str(unit or "").strip().lower(), str(unit or "").strip())
+
+
+# ------------------------------------------------- AirCasting per-session export (a track)
+def _sniff_session_export(path: Path) -> tuple[int, list[list[str]]] | None:
+    """Find the real header of a session export, and the metadata rows above it.
+
+    The file opens with paired rows — a label repeated across the measurement columns,
+    then that label’s value for each of them — and only afterwards the header the
+    readings sit under::
+
+        ,,,,,Sensor_Name,Sensor_Name,Sensor_Name
+        ,,,,,AirBeam3-PM1,AirBeam3-PM2.5,AirBeam3-RH
+        ObjectID,Session_Name,Timestamp,Latitude,Longitude,1:Measurement_Value,...
+
+    Returns ``None`` for anything that is not this layout, so the caller can fall back
+    to reading the file as an ordinary CSV.
+    """
+    preamble: list[list[str]] = []
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as fh:
+            for index, row in enumerate(csv.reader(fh)):
+                if index >= SESSION_HEADER_SCAN:
+                    return None
+                cells = [cell.strip() for cell in row]
+                if cells and cells[0].lower() == "objectid" and any(
+                        cell.lower().endswith("measurement_value") for cell in cells):
+                    return index, preamble
+                preamble.append(cells)
+    except (OSError, csv.Error, UnicodeDecodeError):
+        return None
+    return None
+
+
+def _metadata_by_column(rows: list[list[str]]) -> dict[str, dict[int, str]]:
+    """``{"sensor_name": {5: "AirBeam3-F", 6: "AirBeam3-PM1", ...}, ...}``.
+
+    A label row carries one word repeated over the measurement columns, so a row with
+    exactly one distinct value names the row beneath it. Anything else is skipped rather
+    than guessed at.
+    """
+    found: dict[str, dict[int, str]] = {}
+    index = 0
+    while index + 1 < len(rows):
+        labels = {cell for cell in rows[index] if cell}
+        if len(labels) == 1:
+            found[labels.pop().lower()] = {i: v for i, v in enumerate(rows[index + 1]) if v}
+            index += 2
+        else:
+            index += 1
+    return found
+
+
+def _session_id(path: Path, names: pd.Series) -> pd.Series:
+    """The AirCasting session number, taken from the download’s file name.
+
+    The export is named ``<session name>_<session id>__<export stamp>.csv`` and holds the
+    number nowhere inside, so a renamed file falls back to the session name. Either way
+    the value only has to be stable and unique per recording: it is two thirds of the key
+    that stops a re-import counting the same readings twice.
+    """
+    match = re.match(r"^(?P<name>.+?)_(?P<id>\d{4,})__", path.stem)
+    if match:
+        return pd.Series(match.group("id"), index=names.index)
+    return names.astype(str).str.strip().replace("", "session")
+
+
+def read_session_export(path: Path) -> pd.DataFrame | None:
+    """Read a per-session export into the long AirCasting layout, or ``None`` if it is not one.
+
+    Every reading keeps the coordinates of its own GPS fix — that is the point of a
+    mobile recording, and what the map explorer draws as the sensor’s track.
+    """
+    sniffed = _sniff_session_export(path)
+    if sniffed is None:
+        return None
+    header_index, preamble = sniffed
+    meta = _metadata_by_column(preamble)
+    wide = pd.read_csv(path, skiprows=header_index, dtype=str, keep_default_na=False,
+                       encoding="utf-8-sig", low_memory=False)
+    wide.columns = [str(column).strip() for column in wide.columns]
+    columns = {column.lower(): column for column in wide.columns}
+    value_columns = [c for c in wide.columns if c.lower().endswith("measurement_value")]
+    missing = {"timestamp"} - set(columns)
+    if missing or not value_columns:
+        raise IngestError("This looks like an AirCasting session export but has no Timestamp "
+                          "or Measurement_Value columns.")
+    blank = pd.Series("", index=wide.index)
+    names = wide[columns["session_name"]] if "session_name" in columns else blank
+    session_id = _session_id(path, names)
+    frames = []
+    for column in value_columns:
+        at = wide.columns.get_loc(column)
+        sensor = meta.get("sensor_name", {}).get(at) or column
+        frames.append(pd.DataFrame({
+            "device_group": meta.get("sensor_package_name", {}).get(at, ""),
+            "session_id": session_id,
+            # The export carries no stream ids; the session number identifies the recording.
+            "stream_id": "",
+            "sensor_name": sensor,
+            "measurement_type": meta.get("measurement_type", {}).get(at, ""),
+            "unit": normalise_unit(meta.get("measurement_units", {}).get(at, "")),
+            "source_time": wide[columns["timestamp"]],
+            "value": wide[column],
+            "latitude": wide[columns["latitude"]] if "latitude" in columns else blank,
+            "longitude": wide[columns["longitude"]] if "longitude" in columns else blank,
+            # Each row is where the sensor was at that second, not a session-wide location.
+            "coordinate_source": "measurement",
+            "time_status": "source_clock_unverified",
+        }))
+    return pd.concat(frames, ignore_index=True)
+
+
+def read_source_csv(path: Path) -> pd.DataFrame:
+    """Read a sensor file into one of the layouts :func:`normalise` understands."""
+    session = read_session_export(path)
+    if session is not None:
+        return session
+    return pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig", low_memory=False)
 
 
 def _parse_times(df: pd.DataFrame) -> pd.Series:
@@ -77,8 +215,8 @@ def _parse_times(df: pd.DataFrame) -> pd.Series:
     return times.dt.floor("s")
 
 
-def normalise(df: pd.DataFrame, source_file: str) -> tuple[pd.DataFrame, int, str]:
-    """Return (tidy frame, rejected row count, detected layout)."""
+def normalise(df: pd.DataFrame, source_file: str) -> tuple[pd.DataFrame, int, int, str]:
+    """Return (tidy frame, rejected rows, rows outside the region, detected layout)."""
     df.columns = [c.strip().lower() for c in df.columns]
     cols = set(df.columns)
     if AIRCASTING_REQUIRED <= cols and ({"source_time", "time_utc", "raw_time"} & cols):
@@ -130,7 +268,11 @@ def normalise(df: pd.DataFrame, source_file: str) -> tuple[pd.DataFrame, int, st
     for col in ("name_hint", "region_hint", "measurement_type", "unit", "session_id", "stream_id", "time_status", "coordinate_source"):
         tidy[col] = tidy[col].fillna("").astype(str)
     valid = tidy["time"].notna() & np.isfinite(tidy["value"]) & (tidy["measurement"] != "")
-    return tidy[valid].copy(), int((~valid).sum()), layout
+    # A reading whose fix lies outside the region is not stored at all. It is counted
+    # apart from the malformed rows because it is a different thing to tell someone: the
+    # file was readable, the sensor simply was not where this platform covers.
+    beyond = valid & region.outside(tidy["latitude"], tidy["longitude"])
+    return tidy[valid & ~beyond].copy(), int((~valid).sum()), int(beyond.sum()), layout
 
 
 # --------------------------------------------------------------------------- stations
@@ -143,6 +285,21 @@ def _derive_code(key: str) -> tuple[str, str]:
         return f"{prefix}-{suffix}", f"{'AirBeam' + model.group(1) if model else 'Device'} {suffix}"
     clean = re.sub(r"^(station|session|query):", "", key)
     return re.sub(r"[^A-Za-z0-9]+", "-", clean).strip("-").upper()[:24] or "STATION", clean[:120]
+
+
+def _station_for_device(key: str, code: str) -> Station | None:
+    """The station already standing for this sensor, matched on its hardware address.
+
+    One sensor is spelled several ways across AirCasting's own exports — the downloader
+    writes ``query:AirBeam3-b0b21c7627c4;…`` where a session export writes
+    ``AirBeam3:b0b21c7627c4`` — and coordinates cannot reconcile them, because a fixed
+    indoor session has none and a mobile one is a track rather than a point. The MAC
+    address in the key can: it names the hardware, so both spellings belong to the same
+    station instead of standing up a second copy of one sensor.
+    """
+    if not re.search(r"[0-9A-Fa-f]{12}", key):
+        return None
+    return Station.objects.filter(code=code).first()
 
 
 def _unique_code(code: str) -> str:
@@ -180,11 +337,11 @@ def resolve_station(key: str, rows: pd.DataFrame, force_station: Station | None 
         station = next((s for s in Station.objects.exclude(latitude=None) if _same_point(s, lat, lon)), None)
     if station is None:
         hint = rows["station_hint"].iloc[0]
-        existing = Station.objects.filter(code=hint).first() if hint else None
+        code, name = _derive_code(key)
+        existing = (Station.objects.filter(code=hint).first() if hint else None) or _station_for_device(key, code)
         if existing:
             station = existing
         else:
-            code, name = _derive_code(key)
             station = Station.objects.create(
                 code=_unique_code(hint[:32] if hint else code),
                 name=(rows["name_hint"].iloc[0] or (hint if hint else name))[:120],
@@ -197,6 +354,15 @@ def resolve_station(key: str, rows: pd.DataFrame, force_station: Station | None 
     station.is_indoor = station.is_indoor or indoor
     station.save()
     return station
+
+
+def _distinct_positions(df: pd.DataFrame) -> int:
+    if not {"latitude", "longitude"} <= set(df.columns):
+        return 0
+    located = df[["latitude", "longitude"]].dropna()
+    if located.empty:
+        return 0
+    return int(len(located.round(settings.OBSERVATORY_COORD_PRECISION).drop_duplicates()))
 
 
 def refresh_station_summary(station: Station) -> None:
@@ -213,6 +379,10 @@ def refresh_station_summary(station: Station) -> None:
             "key": key, "file": path.stem, "unit": seen_units.iat[-1] if len(seen_units) else "",
             "type": mtype.iat[-1] if len(mtype) else "", "label": measurement_label(key, mtype.iat[-1] if len(mtype) else ""),
             "count": int(len(df)),
+            # Distinct places these readings were taken, which is what separates a track
+            # from a point: a fixed station repeats one coordinate on every row, however
+            # many rows it has, while a mobile recording has a new fix every second.
+            "positions": _distinct_positions(df),
         })
         total += len(df)
         first = min(first, df["time"].iat[0]) if first is not None else df["time"].iat[0]
@@ -223,6 +393,26 @@ def refresh_station_summary(station: Station) -> None:
     station.first_reading = first.to_pydatetime() if first is not None else None
     station.last_reading = last.to_pydatetime() if last is not None else None
     station.save()
+
+
+def refresh_station_location(station: Station) -> None:
+    """Re-derive a station's marker from the readings it still holds.
+
+    Needed after readings are removed rather than added: a station placed at the median
+    of a track has to move when part of that track goes, and one whose every located
+    reading has gone belongs nowhere on the map. A location entered by hand is left
+    alone, as it is everywhere else.
+    """
+    if station.location_source == "manual":
+        return
+    frames = [storage.read_series(station.code, m["file"]) for m in station.measurements]
+    rows = [frame for frame in frames if not frame.empty]
+    if rows:
+        latitude, longitude, source, _indoor = _location(pd.concat(rows, ignore_index=True))
+    else:
+        latitude, longitude, source = None, None, "none"
+    station.latitude, station.longitude, station.location_source = latitude, longitude, source
+    station.save(update_fields=["latitude", "longitude", "location_source"])
 
 
 # --------------------------------------------------------------------------- datasets
@@ -273,10 +463,13 @@ def rebuild_datasets(station: Station, weeks: set[date]) -> None:
 # --------------------------------------------------------------------------- entry points
 def ingest_frame(raw: pd.DataFrame, source_file: str, force_station: Station | None = None) -> IngestResult:
     result = IngestResult(rows_read=len(raw))
-    tidy, rejected, layout = normalise(raw, source_file)
-    result.rows_rejected = rejected
+    tidy, rejected, beyond, layout = normalise(raw, source_file)
+    result.rows_rejected = rejected + beyond
+    result.rows_outside_region = beyond
     if rejected:
         result.warnings.append(f"{rejected} rows skipped: missing time, value or measurement.")
+    if beyond:
+        result.warnings.append(f"{beyond} readings were taken outside {region.name()} and were not stored.")
     if tidy.empty:
         result.warnings.append("No valid readings found in this file.")
         return result
@@ -303,7 +496,7 @@ def ingest_file(path: Path | str, source: str = "cli", force_station: Station | 
     path = Path(path)
     run = run or ImportRun.objects.create(source=source, filename=path.name)
     try:
-        raw = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig", low_memory=False)
+        raw = read_source_csv(path)
         result = ingest_frame(raw, path.name, force_station)
         run.rows_read += result.rows_read
         run.rows_stored += result.rows_stored

@@ -308,6 +308,65 @@
     await Promise.all([loadSummary(), loadDatasets(), loadSensors()]);
   });
 
+  // ---------------- readings recorded outside the region
+  function renderOutsideRegion(survey) {
+    const box = $("outside-region");
+    box.innerHTML = "";
+    if (!survey.enabled) {
+      box.textContent = "Readings are not restricted to a region, so none of them count as outside one.";
+      return;
+    }
+    if (!survey.total) {
+      box.textContent = `Nothing to remove: everything stored was recorded inside ${survey.region}.`;
+      return;
+    }
+    const list = document.createElement("ul");
+    list.style.margin = "0";
+    for (const station of survey.stations) {
+      const li = document.createElement("li");
+      li.textContent = `${station.name} · ${station.code} — ${fmt.int(station.readings)} readings taken outside ${survey.region}.`;
+      list.appendChild(li);
+    }
+    for (const station of survey.misplaced) {
+      const li = document.createElement("li");
+      li.textContent = `${station.name} · ${station.code} — its map marker was placed outside ${survey.region}.`;
+      list.appendChild(li);
+    }
+    box.appendChild(list);
+  }
+
+  $("purge-outside-region").addEventListener("click", async (event) => {
+    if (event.currentTarget.dataset.loginUrl) { location.href = event.currentTarget.dataset.loginUrl; return; }
+    const survey = await api("/api/outside-region/").catch((err) => { toast(err.message, 6000); return null; });
+    if (!survey) return;
+    renderOutsideRegion(survey);
+    if (!survey.enabled) return toast("Readings are not restricted to a region.");
+    if (!survey.total) return toast(`Nothing to remove: everything stored was recorded inside ${survey.region}.`);
+
+    // The count is the whole warning: a reading removed here cannot be brought back.
+    const lines = [`Permanently remove ${fmt.int(survey.readings)} reading${survey.readings === 1 ? "" : "s"} taken outside ${survey.region}?`];
+    if (survey.stations.length) {
+      lines.push("", ...survey.stations.map((s) => `  • ${s.name} (${fmt.int(s.readings)} readings)`));
+      lines.push("", "A station keeps the readings taken inside the region and its marker moves to match. One with nothing left inside is removed.");
+    }
+    if (survey.misplaced.length) {
+      lines.push("", `${survey.misplaced.length} station marker${survey.misplaced.length === 1 ? "" : "s"} placed by hand outside ${survey.region} will be cleared.`);
+    }
+    lines.push("", "This cannot be undone.");
+    if (!window.confirm(lines.join("\n"))) return;
+
+    let result;
+    try {
+      result = await api("/api/outside-region/purge/", { method: "POST", json: {} });
+    } catch (err) {
+      toast(err.message, 7000);
+      return;
+    }
+    toast([result.detail, ...(result.notes || [])].join(" "), 7000);
+    renderOutsideRegion(await api("/api/outside-region/"));
+    await Promise.all([loadSummary(), loadDatasets(), loadSensors()]);
+  });
+
   $("q").addEventListener("input", debounce((e) => { table.q = e.target.value.trim(); table.page = 1; loadDatasets(); }));
   $("region").addEventListener("change", (e) => { table.region = e.target.value; table.page = 1; loadDatasets(); });
   $("period").addEventListener("change", (e) => { table.period = e.target.value; table.page = 1; loadDatasets(); });

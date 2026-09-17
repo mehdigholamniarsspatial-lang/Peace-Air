@@ -5,8 +5,10 @@ only holds what the interface needs to look things up quickly: stations and the 
 keys that map onto them, registered AirCasting devices, the import log, the catalogue
 of downloadable weekly datasets and the import schedule.
 """
+import re
 from datetime import date, timedelta
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -80,6 +82,63 @@ class AirCastingDevice(models.Model):
 
     def __str__(self):
         return self.label or self.device_id
+
+    @staticmethod
+    def hardware_key(device_id: str) -> str:
+        """What makes two identifiers the same sensor: the address of the hardware.
+
+        AirCasting spells one sensor several ways — ``AIRBEAM3:B0B21C7627C4`` on the
+        label, ``AirBeam3-b0b21c7627c4`` in a session export — and ``device_id`` is
+        unique only as written, so the same box could be registered twice under two
+        spellings. It would then be downloaded twice into one station, because imports
+        resolve by the same address (see ``services/ingest.py``). An identifier with no
+        recognisable address falls back to itself, case-folded.
+        """
+        mac = re.search(r"[0-9A-Fa-f]{12}", device_id or "")
+        return mac.group(0).lower() if mac else (device_id or "").strip().lower()
+
+    @classmethod
+    def registered_as(cls, device_id: str):
+        """The sensor already registered for this hardware, or ``None``.
+
+        Compared in Python rather than in a query: the list is a handful of rows, and the
+        comparison is on a derived key that no column holds.
+        """
+        key = cls.hardware_key(device_id)
+        return next((d for d in cls.objects.all() if cls.hardware_key(d.device_id) == key), None)
+
+    @classmethod
+    def duplicate_message(cls, device_id: str, exclude_pk=None) -> str | None:
+        """Why this sensor cannot be registered again, or ``None`` if it can.
+
+        One message for every way a sensor is added, so the instruction cannot drift
+        between the Data manager, the Django admin and the command line.
+        """
+        existing = cls.registered_as(device_id)
+        if not existing or (exclude_pk is not None and existing.pk == exclude_pk):
+            return None
+        written = (device_id or "").strip()
+        named = ("is already registered" if existing.device_id.strip().lower() == written.lower()
+                 else f"is the same sensor as {existing.device_id}, which is already registered")
+        # Say what removing it costs: someone re-adding a sensor to change a date is not
+        # expecting to lose the history they already have.
+        return (f"{written} {named}. Remove the existing sensor before adding it again — removing it "
+                "also deletes its stations, stored readings, weekly datasets and downloaded files.")
+
+    def clean(self):
+        """Refuse a second registration of one sensor, whatever spelling it arrives in.
+
+        On the model rather than only on the form, because the Django admin registers
+        sensors too and ``device_id`` is unique only as written: the same box entered as
+        ``AirBeam3-b0b21c7627c4`` beside ``AIRBEAM3:B0B21C7627C4`` would pass that
+        constraint and then be downloaded twice into one station.
+        """
+        super().clean()
+        # A blank id means the field already failed its own validation; leave that error
+        # to stand on its own rather than adding a second one about a sensor named "".
+        message = self.duplicate_message(self.device_id, exclude_pk=self.pk) if self.device_id else None
+        if message:
+            raise ValidationError({"device_id": message})
 
     def session_ids(self):
         return [int(s) for s in self.known_session_ids.replace(";", ",").split(",") if s.strip().isdigit()]

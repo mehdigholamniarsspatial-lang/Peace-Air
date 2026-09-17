@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-FAHRENHEIT_UNITS = {"f", "°f", "degf", "deg f", "fahrenheit"}
+FAHRENHEIT_UNITS = {"f", "°f", "degf", "deg f", "fahrenheit", "degrees fahrenheit"}
 CELSIUS = "°C"
 
 

@@ -14,8 +14,9 @@ from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from .models import AirCastingDevice, Dataset, ImportRun, ScheduleConfig, Station
-from .services import analytics, cleanup, storage, units
-from .services.deletion import delete_datasets, device_stations, log_deletion
+from .services import analytics, cleanup, region, storage, units
+from .services.deletion import (delete_datasets, device_stations, find_outside_region, log_deletion,
+                                purge_outside_region)
 from .services.ingest import ingest_file, save_upload
 from .services.sync import run_sync_in_background
 
@@ -48,10 +49,24 @@ def _run_json(run):
             "stations": run.stations, "message": run.message}
 
 
+def _has_track(station):
+    """Whether this station moved while it was recording, and so has a path to draw.
+
+    Stations summarised before tracks were supported carry no position count; they are
+    taken to be mobile only when their marker was placed from the readings themselves,
+    which is exactly the case a track would exist for. The count reappears the next time
+    anything is imported for them.
+    """
+    if any("positions" in m for m in station.measurements):
+        return any(m.get("positions", 0) > 1 for m in station.measurements)
+    return station.location_source == "measurement_median"
+
+
 def _station_json(s):
     # Stored metadata keeps the sensor's own unit; the interface shows Celsius.
     return {"code": s.code, "name": s.name, "region": s.region, "latitude": s.latitude, "longitude": s.longitude,
             "location_source": s.get_location_source_display(), "is_indoor": s.is_indoor,
+            "has_track": _has_track(s),
             "reading_count": s.reading_count, "measurements": units.convert_measurements(s.measurements),
             "first_reading": s.first_reading.isoformat() if s.first_reading else None,
             "last_reading": s.last_reading.isoformat() if s.last_reading else None}
@@ -97,6 +112,23 @@ def station_analysis(request, code):
     except ValueError as error:
         return _bad(str(error))
     return JsonResponse(analytics.analyse(q))
+
+
+@require_GET
+def station_track(request, code):
+    """The selected station's path: one entry per recording, thinned for the browser.
+
+    Kept apart from ``/analysis/`` because the two change on different things — the
+    charts redraw when the aggregation or the confidence level changes, and neither moves
+    the sensor — so the heavier payload is only fetched when the window or the
+    measurement actually changes.
+    """
+    get_object_or_404(Station, code=code)
+    try:
+        q = analytics.Query.from_request(code, request.GET)
+    except ValueError as error:
+        return _bad(str(error))
+    return JsonResponse(analytics.track(q))
 
 
 @require_GET
@@ -235,6 +267,52 @@ def orphans_purge(request):
     return JsonResponse({"deleted": report.datasets, "readings": report.readings,
                          "stations_removed": report.stations, "detail": report.describe(),
                          "notes": report.notes})
+
+
+def _outside_region_json(survey):
+    """The survey with the station names the page needs, not just their codes."""
+    named = dict(Station.objects.filter(code__in=[*survey.by_station, *survey.misplaced])
+                 .values_list("code", "name"))
+    return {
+        "region": region.name(),
+        "enabled": region.enabled(),
+        "readings": survey.readings,
+        "stations": [{"code": code, "name": named.get(code, code), "readings": count}
+                     for code, count in sorted(survey.by_station.items())],
+        "misplaced": [{"code": code, "name": named.get(code, code)} for code in survey.misplaced],
+        "total": survey.readings + len(survey.misplaced),
+        "detail": survey.describe(),
+    }
+
+
+@require_GET
+def outside_region(request):
+    """What is stored that was recorded outside the region, without removing any of it.
+
+    Separate from the purge below so the Data manager can show the count and let someone
+    decide: readings cannot be brought back, and a number is the only warning worth giving.
+    """
+    denied = _superuser_only(request)
+    if denied:
+        return denied
+    return JsonResponse(_outside_region_json(find_outside_region()))
+
+
+@require_POST
+def outside_region_purge(request):
+    denied = _superuser_only(request)
+    if denied:
+        return denied
+    if not region.enabled():
+        return _bad("Readings are not restricted to a region, so none are outside one.", status=409)
+    survey = find_outside_region()
+    if not survey.anything:
+        return _bad(f"There is nothing to remove: everything stored was recorded inside {region.name()}.",
+                    status=404)
+    report = purge_outside_region()
+    return JsonResponse({"deleted": report.datasets, "readings": report.readings,
+                         "stations_removed": report.stations, "stations_changed": report.changed,
+                         "detail": report.describe(), "notes": report.notes})
 
 
 def _dataset_path(d):

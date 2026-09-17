@@ -87,6 +87,13 @@ OBSERVATORY_DEFAULT_REGION = "Ireland"
 # Two stations whose coordinates round to the same value at this precision are
 # treated as one spatial point (5 decimal places is roughly 1 m).
 OBSERVATORY_COORD_PRECISION = 5
+# Readings taken outside the region are not stored, so a stray GPS fix cannot put a
+# point on the map where the project does not reach. The boundary is the island of
+# Ireland (see services/region.py); point OBSERVATORY_REGION_GEOJSON at a WGS84 GeoJSON
+# file to use another one, or set OBSERVATORY_RESTRICT_TO_REGION=0 to keep everything.
+OBSERVATORY_RESTRICT_TO_REGION = os.environ.get("OBSERVATORY_RESTRICT_TO_REGION", "1") == "1"
+OBSERVATORY_REGION_NAME = os.environ.get("OBSERVATORY_REGION_NAME", "Ireland")
+OBSERVATORY_REGION_GEOJSON = os.environ.get("OBSERVATORY_REGION_GEOJSON", "")
 # Esri World Topographic Map tiles (Web Mercator), displayed through Leaflet.
 OBSERVATORY_TILE_URL = (
     "https://server.arcgisonline.com/ArcGIS/rest/services/"

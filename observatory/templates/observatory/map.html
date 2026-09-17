@@ -24,6 +24,9 @@
     <option value="raw">Individual readings</option><option value="10min">10-minute mean</option>
     <option value="hourly">Hourly mean</option><option value="6h">6-hour mean</option><option value="daily">Daily mean</option>
   </select>
+  <label class="inline" for="show-track">Sensor track</label>
+  <button class="switch" id="show-track" type="button" role="switch" aria-checked="true"
+          aria-label="Show the sensor's track on the map"></button>
 </section>
 
 <div class="explorer">
@@ -31,6 +34,28 @@
     <div id="map" data-tiles="{{ tile_url }}" data-attribution="{{ tile_attribution }}"></div>
     <div class="map-chip" id="count-chip">Loading stations…</div>
     <div class="unplaced" id="unplaced" hidden></div>
+
+    {% comment %}
+      A mobile recording has a position for every reading, so it is a path rather than a
+      point. The legend is the scale it is coloured by, and the bar below walks the
+      sensor along it one fix at a time. Both stay hidden for a fixed station.
+    {% endcomment %}
+    <div class="track-legend" id="track-legend" hidden>
+      <div class="track-legend-head"><span id="track-legend-title">PM2.5</span> <span class="muted" id="track-legend-unit"></span></div>
+      <ul id="track-scale"></ul>
+      <div class="muted small" id="track-note"></div>
+    </div>
+
+    <div class="track-bar" id="track-bar" hidden>
+      <button class="play" id="track-play" type="button" aria-label="Play the track">{% icon "play" %}</button>
+      <div class="track-bar-main">
+        <label class="visually-hidden" for="track-scrub">Position along the track</label>
+        <input type="range" id="track-scrub" class="scrub" min="0" max="0" value="0" step="1">
+        <div class="track-readout"><span id="track-when">–</span><span id="track-value"></span></div>
+      </div>
+      <label class="visually-hidden" for="track-session">Recording</label>
+      <select id="track-session" class="select select-sm"></select>
+    </div>
   </section>
 
   <aside class="side" aria-live="polite">

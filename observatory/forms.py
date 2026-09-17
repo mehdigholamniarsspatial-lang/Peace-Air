@@ -2,6 +2,7 @@ from django import forms
 
 from . import survey
 from .models import AirCastingDevice, Station
+from .services import region
 
 
 class StationLocationForm(forms.ModelForm):
@@ -16,6 +17,12 @@ class StationLocationForm(forms.ModelForm):
             raise forms.ValidationError("Enter both latitude and longitude, or leave both empty.")
         if lat is not None and not (-90 <= lat <= 90 and -180 <= lon <= 180):
             raise forms.ValidationError("Latitude must be between -90 and 90 and longitude between -180 and 180.")
+        # Placing a station by hand is the one way a point could reach the map from
+        # outside the region, since every reading is checked on the way in.
+        if lat is not None and region.enabled() and not region.contains(lat, lon):
+            raise forms.ValidationError(
+                f"That location is outside {region.name()}, which is the area this platform covers. "
+                "Check the latitude and longitude, or leave both empty to leave the station unplaced.")
         return data
 
 
@@ -31,6 +38,12 @@ class DeviceForm(forms.ModelForm):
         value = self.cleaned_data["device_id"].strip()
         if ":" not in value and "-" not in value:
             raise forms.ValidationError("Use the full identifier, e.g. AIRBEAM3:B0B21C7627C4.")
+        # Checked here as well as on the model so that the field carries the error and
+        # Django's own "already exists" message for the unique column is not added beside
+        # it: two sentences saying the same thing is worse than one saying what to do.
+        duplicate = AirCastingDevice.duplicate_message(value, exclude_pk=self.instance.pk)
+        if duplicate:
+            raise forms.ValidationError(duplicate)
         return value
 
     def clean(self):

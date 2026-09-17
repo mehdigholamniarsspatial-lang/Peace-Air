@@ -75,3 +75,22 @@ class MapExplorerLayoutTests(TestCase):
 
         self.assertNotIn("pop-link", source)
         self.assertNotIn("/analysis/?station=", source)
+
+
+class TemplateCommentTests(TestCase):
+    """``{# … #}`` cannot span lines: Django renders the rest of it as page text.
+
+    The failure is silent — the template still compiles, and a note meant for whoever
+    reads the file next turns up in the middle of the interface. Checked against the
+    source rather than one rendered page so a template nobody thought to test is covered
+    too.
+    """
+
+    def test_no_template_comment_spans_more_than_one_line(self):
+        root = Path(__file__).resolve().parents[1] / "templates"
+        offenders = []
+        for template in sorted(root.rglob("*.html")):
+            for number, line in enumerate(template.read_text(encoding="utf-8").splitlines(), start=1):
+                if "{#" in line and "#}" not in line.split("{#", 1)[1]:
+                    offenders.append(f"{template.relative_to(root)}:{number}")
+        self.assertEqual(offenders, [], "Use {% comment %} … {% endcomment %} for these")

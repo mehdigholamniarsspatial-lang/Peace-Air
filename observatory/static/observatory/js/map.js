@@ -1,4 +1,5 @@
-/* Map explorer: one marker per station, popups, side panel charts, time window. */
+/* Map explorer: one marker per station, its track when it moved, popups, side panel
+   charts, time window. */
 (function () {
   "use strict";
   const { api, fmt, DualRange, clockMs, isoDay, DAY, debounce, charts } = window.AQ;
@@ -7,15 +8,33 @@
 
   const AGG_LABELS = { auto: "Automatic", raw: "Readings", "10min": "10-minute mean", hourly: "Hourly mean",
                        "6h": "6-hour mean", daily: "Daily mean" };
+  /* The four bands a track is coloured by, low to high. The edges come from the API so
+     that the legend, the line and the published scale for the sensor cannot disagree. */
+  const TRACK_BANDS = [
+    { edge: "low", color: "#2f9e5e" },
+    { edge: "middle", color: "#e8b93b" },
+    { edge: "high", color: "#ef7f2b" },
+    { edge: "max", color: "#c53a31" },
+  ];
+  // Longer than this between two fixes and the sensor was not travelling between them:
+  // joining them would draw a straight line across whatever it was carried past.
+  const TRACK_GAP = 5 * 60000;
+  const TRACK_DOTS = 320;       // hoverable readings drawn along the path
+  const TRACK_FRAME = 80;       // ms between playback frames
+  const TRACK_RUN = 18000;      // how long a full playback of the track takes
+
   const params = new URLSearchParams(location.search);
   const state = {
     measurement: "PM2.5", ci: 95, selected: JSON.parse($("initial-station").textContent) || null,
     aggregation: AGG_LABELS[params.get("aggregation")] ? params.get("aggregation") : "auto",
     start: null, end: null, // ms; end exclusive — drives the map and the series alike
     features: [], unplaced: [], markers: new Map(), extent: null, labels: {},
+    showTrack: true, track: null, trackSession: "all", trackPoints: [], trackRequest: 0, fittedTrack: null,
   };
   const seriesWindow = () => [state.start, state.end];
   const label = () => state.labels[state.measurement] || state.measurement;
+  const allStations = () => [...state.features.map((f) => f.properties), ...state.unplaced];
+  const findStation = (code) => allStations().find((s) => s.code === code);
 
   // ---------------- map
   const mapEl = $("map");
@@ -23,6 +42,11 @@
   L.control.zoom({ position: "bottomright" }).addTo(map);
   L.control.scale({ position: "bottomleft", imperial: false, maxWidth: 140 }).addTo(map);
   L.tileLayer(mapEl.dataset.tiles, { attribution: mapEl.dataset.attribution, subdomains: "abcd", maxZoom: 19 }).addTo(map);
+  // The track belongs under the station markers and the moving cursor above everything,
+  // so a path never hides the point it belongs to and the cursor is never hidden by it.
+  map.createPane("track").style.zIndex = 390;
+  map.createPane("trackCursor").style.zIndex = 650;
+  const trackLayer = L.layerGroup().addTo(map);
   const layer = L.featureGroup().addTo(map);
 
   const styleFor = (selected) => selected
@@ -105,6 +129,7 @@
 
   const seriesChart = charts.series($("series"));
   const histChart = charts.histogram($("hist"));
+  linkChartToTrack(seriesChart);
 
   /* A station can disappear while this page is open (deleted in the data manager), so
      say so plainly instead of leaving the previous station's numbers up. */
@@ -122,6 +147,8 @@
     $("series-empty").textContent = "This station has been deleted. Its readings and datasets are no longer stored.";
     $("hist-empty").hidden = false;
     $("hist-empty").textContent = "Deleted";
+    state.track = null;
+    drawTrack();
     $("export").setAttribute("aria-disabled", "true");
     $("export").removeAttribute("href");
     clearStats();
@@ -129,8 +156,7 @@
 
   async function loadPanel() {
     const code = state.selected;
-    const all = [...state.features.map((f) => f.properties), ...state.unplaced];
-    const st = all.find((s) => s.code === code);
+    const st = findStation(code);
     if (!st) return showRemoved(code);
     $("st-title").textContent = `${st.name} · ${st.code}`;
     $("st-sub").textContent = st.latitude != null ? `Selected station · ${st.location_source}` : "Selected station · no coordinates yet";
@@ -206,6 +232,7 @@
   }
 
   function select(code, { pan = true } = {}) {
+    const changed = state.selected !== code;
     state.selected = code;
     refreshMarkerStyles();
     const m = state.markers.get(code);
@@ -214,6 +241,258 @@
     url.searchParams.set("station", code);
     history.replaceState(null, "", url);
     loadPanel();
+    // A new station arrives with every recording shown, and the map moves to fit the
+    // path: a track is usually a few streets inside a view drawn for the whole country.
+    // Fitting once per station leaves any zooming done afterwards alone.
+    if (changed) { stopTrack(); state.trackSession = "all"; }
+    loadTrack({ fit: state.fittedTrack !== code });
+  }
+
+  // ---------------- sensor track
+  /* A fixed station's readings all share one location, and the marker says everything
+     there is to say about where it was. A mobile recording carries a coordinate with
+     every reading, so the same data is a path: drawn here in the colours of the scale
+     the readings are read against, walkable a fix at a time, and tied to the chart
+     beside it so hovering a moment in time shows where the sensor was at that moment. */
+  let cursor = null;
+  let trackTimer = null;
+
+  const trackUnit = () => fmt.unit(state.track ? state.track.unit : "");
+
+  function bandOf(value, thresholds) {
+    if (value == null || !thresholds) return 0;
+    if (value <= thresholds.low) return 0;
+    if (value <= thresholds.middle) return 1;
+    if (value <= thresholds.high) return 2;
+    return 3;
+  }
+
+  const shownSessions = () => {
+    if (!state.track || !state.showTrack) return [];
+    return state.trackSession === "all"
+      ? state.track.sessions
+      : state.track.sessions.filter((s) => s.id === state.trackSession);
+  };
+
+  /* The shown sessions as one list of fixes in time order — what the scrubber walks and
+     what a hover on the chart is matched against. */
+  function flattenTrack(sessions) {
+    const points = [];
+    for (const session of sessions) {
+      for (let i = 0; i < session.t.length; i++) {
+        points.push({ t: session.t[i], lat: session.lat[i], lon: session.lon[i], v: session.v[i] });
+      }
+    }
+    return points.sort((a, b) => a.t - b.t);
+  }
+
+  function renderLegend() {
+    const t = state.track;
+    if (!t) return;
+    const edges = [t.thresholds.min, t.thresholds.low, t.thresholds.middle, t.thresholds.high, t.thresholds.max];
+    $("track-legend-title").textContent = label();
+    $("track-legend-unit").textContent = trackUnit();
+    const list = $("track-scale");
+    list.innerHTML = "";
+    TRACK_BANDS.forEach((band, i) => {
+      const li = document.createElement("li");
+      const swatch = document.createElement("i");
+      swatch.style.background = band.color;
+      li.appendChild(swatch);
+      // The top band is open-ended: a reading above the scale is still the top colour.
+      li.append(i === TRACK_BANDS.length - 1
+        ? `over ${fmt.num(edges[i], 0)}`
+        : `${fmt.num(edges[i], 0)} – ${fmt.num(edges[i + 1], 0)}`);
+      list.appendChild(li);
+    });
+    $("track-note").textContent = t.returned < t.points
+      ? `${fmt.int(t.returned)} of ${fmt.int(t.points)} fixes drawn`
+      : `${fmt.int(t.points)} fixes`;
+  }
+
+  function fillSessions() {
+    const select = $("track-session");
+    const sessions = state.track ? state.track.sessions : [];
+    select.innerHTML = "";
+    if (sessions.length > 1) select.add(new Option(`All recordings (${sessions.length})`, "all"));
+    for (const session of sessions) {
+      const start = clockMs(session.start);
+      select.add(new Option(`${fmt.day(start)} ${fmt.time(start)} · ${fmt.int(session.count)}`, session.id));
+    }
+    if (sessions.length === 1) state.trackSession = sessions[0].id;
+    else if (!sessions.some((x) => x.id === state.trackSession)) state.trackSession = "all";
+    select.value = state.trackSession;
+    select.hidden = sessions.length < 2;
+  }
+
+  /* The nearest fix to a point on the map, so clicking anywhere along the line answers
+     with the reading taken there and not only where a dot happens to be drawn. */
+  function nearestToLatLng(latlng) {
+    const scale = Math.cos((latlng.lat * Math.PI) / 180);
+    let best = 0, closest = Infinity;
+    state.trackPoints.forEach((p, i) => {
+      const dy = p.lat - latlng.lat, dx = (p.lon - latlng.lng) * scale;
+      const distance = dy * dy + dx * dx;
+      if (distance < closest) { closest = distance; best = i; }
+    });
+    return best;
+  }
+
+  function nearestToTime(ms) {
+    const points = state.trackPoints;
+    let lo = 0, hi = points.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (points[mid].t < ms) lo = mid + 1; else hi = mid;
+    }
+    return lo > 0 && Math.abs(points[lo - 1].t - ms) < Math.abs(points[lo].t - ms) ? lo - 1 : lo;
+  }
+
+  function drawTrack() {
+    trackLayer.clearLayers();
+    cursor = null;
+    const sessions = shownSessions();
+    const has = sessions.length > 0;
+    mapEl.closest(".map-card").classList.toggle("has-track", has);
+    $("track-legend").hidden = !has;
+    $("track-bar").hidden = !has;
+    state.trackPoints = flattenTrack(sessions);
+    if (!has) return stopTrack();
+    renderLegend();
+    const thresholds = state.track.thresholds;
+    const unit = trackUnit();
+    const pick = (event) => { stopTrack(); setTrackIndex(nearestToLatLng(event.latlng)); };
+
+    for (const session of sessions) {
+      const stroke = (run, band) => {
+        if (run.length < 2) return;
+        L.polyline(run, { pane: "track", color: TRACK_BANDS[band].color, weight: 5, opacity: 0.85,
+                          lineCap: "round", lineJoin: "round" }).on("click", pick).addTo(trackLayer);
+      };
+      let run = [[session.lat[0], session.lon[0]]];
+      let band = bandOf(session.v[0], thresholds);
+      for (let i = 1; i < session.t.length; i++) {
+        const here = [session.lat[i], session.lon[i]];
+        const next = bandOf(session.v[i], thresholds);
+        if (session.t[i] - session.t[i - 1] > TRACK_GAP) { stroke(run, band); run = [here]; band = next; continue; }
+        run.push(here);
+        if (next !== band) { stroke(run, band); run = [here]; band = next; }
+      }
+      stroke(run, band);
+      endMarker(session, 0, "Start");
+      endMarker(session, session.t.length - 1, "End");
+    }
+
+    // Hoverable readings along the path, thinned so a long recording stays responsive.
+    const step = Math.max(1, Math.ceil(state.trackPoints.length / TRACK_DOTS));
+    for (let i = 0; i < state.trackPoints.length; i += step) {
+      const p = state.trackPoints[i];
+      L.circleMarker([p.lat, p.lon], { pane: "track", radius: 3.4, weight: 1, color: "#ffffff",
+                                       fillColor: TRACK_BANDS[bandOf(p.v, thresholds)].color, fillOpacity: 1,
+                                       className: "track-dot" })
+        .bindTooltip(`${fmt.num(p.v)} ${unit} · ${fmt.clock(p.t)}`, { direction: "top", className: "track-tip" })
+        .on("click", () => { stopTrack(); setTrackIndex(i); })
+        .addTo(trackLayer);
+    }
+    $("track-scrub").max = Math.max(0, state.trackPoints.length - 1);
+    setTrackIndex(0);
+  }
+
+  function endMarker(session, i, text) {
+    L.circleMarker([session.lat[i], session.lon[i]], {
+      pane: "track", radius: 6, weight: 3, color: "#132a3e", fillColor: "#ffffff", fillOpacity: 1,
+    }).bindTooltip(`${text} · ${fmt.day(session.t[i])} ${fmt.clock(session.t[i])}`, { direction: "top", className: "track-tip" })
+      .addTo(trackLayer);
+  }
+
+  function setTrackIndex(index, { pan = false } = {}) {
+    const points = state.trackPoints;
+    if (!points.length) return;
+    const p = points[Math.max(0, Math.min(points.length - 1, index))];
+    $("track-scrub").value = points.indexOf(p);
+    $("track-when").textContent = `${fmt.day(p.t)} ${fmt.clock(p.t)}`;
+    $("track-value").textContent = `${fmt.num(p.v)} ${trackUnit()}`;
+    const at = L.latLng(p.lat, p.lon);
+    if (cursor) cursor.setLatLng(at);
+    else cursor = L.circleMarker(at, { pane: "trackCursor", radius: 9, weight: 3, color: charts.colors.teal,
+                                       fillColor: "#ffffff", fillOpacity: 0.9, className: "track-cursor" }).addTo(trackLayer);
+    if (pan && !map.getBounds().pad(-0.15).contains(at)) map.panTo(at, { animate: false });
+  }
+
+  function stopTrack() {
+    clearInterval(trackTimer);
+    trackTimer = null;
+    $("track-play").innerHTML = trackPlayIcon;
+    $("track-play").setAttribute("aria-label", "Play the track");
+  }
+
+  /* Fetch the path for the selected station and window. Fixed stations are never asked:
+     they have no track, and an empty answer for each of them would cost one request per
+     station selected. */
+  async function loadTrack({ fit = false } = {}) {
+    const code = state.selected;
+    const station = findStation(code);
+    const token = ++state.trackRequest;
+    if (!station || !station.has_track || !state.showTrack) {
+      state.track = null;
+      fillSessions();
+      drawTrack();
+      return;
+    }
+    const query = new URLSearchParams({ measurement: state.measurement });
+    const [from, to] = seriesWindow();
+    if (from) query.set("start", isoDay(from));
+    if (to) query.set("end", isoDay(to - DAY));
+    try {
+      const data = await api(`/api/stations/${encodeURIComponent(code)}/track/?${query}`);
+      if (token !== state.trackRequest) return;  // a newer window arrived while this was in flight
+      state.track = data;
+    } catch (err) {
+      if (token !== state.trackRequest) return;
+      state.track = null;
+    }
+    fillSessions();
+    drawTrack();
+    if (fit && state.track && state.track.bounds) {
+      const [[south, west], [north, east]] = state.track.bounds;
+      map.fitBounds(L.latLngBounds([south, west], [north, east]).pad(0.25), { maxZoom: 16 });
+      state.fittedTrack = code;
+    }
+  }
+
+  const trackPlayIcon = $("track-play").innerHTML;
+  $("track-scrub").addEventListener("input", (e) => { stopTrack(); setTrackIndex(+e.target.value); });
+  $("track-session").addEventListener("change", (e) => { state.trackSession = e.target.value; stopTrack(); drawTrack(); });
+  $("track-play").addEventListener("click", () => {
+    if (trackTimer) return stopTrack();
+    const points = state.trackPoints;
+    if (points.length < 2) return;
+    let i = +$("track-scrub").value;
+    if (i >= points.length - 1) i = 0;
+    const step = Math.max(1, Math.round(points.length / (TRACK_RUN / TRACK_FRAME)));
+    $("track-play").innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5h3.5v15H7zM13.5 4.5H17v15h-3.5z" fill="currentColor"/></svg>';
+    $("track-play").setAttribute("aria-label", "Pause the track");
+    trackTimer = setInterval(() => {
+      setTrackIndex(i, { pan: true });
+      if (i >= points.length - 1) return stopTrack();
+      i = Math.min(points.length - 1, i + step);
+    }, TRACK_FRAME);
+  });
+  $("show-track").addEventListener("click", (event) => {
+    state.showTrack = event.currentTarget.getAttribute("aria-checked") !== "true";
+    event.currentTarget.setAttribute("aria-checked", String(state.showTrack));
+    stopTrack();
+    loadTrack({ fit: state.showTrack });
+  });
+
+  /* Hovering the series moves the cursor to where the sensor was at that moment; the
+     chart is the same readings on a different axis, so the two should agree. */
+  function linkChartToTrack(chart) {
+    chart.options.onHover = (event, active) => {
+      if (trackTimer || !state.trackPoints.length || !active.length) return;
+      const point = chart.data.datasets[active[0].datasetIndex].data[active[0].index];
+      if (point && point.x != null) setTrackIndex(nearestToTime(point.x));
+    };
   }
 
   // ---------------- time window
@@ -239,8 +518,10 @@
     showWindow(state.start, state.end);
     // "panel" refreshes only the charts: stepping through time should not refetch the
     // map markers on every frame.
+    // Stepping through time refetches the charts only; the track follows once the
+    // player stops, rather than on every frame.
     if (reload === "panel") { if (state.selected) loadPanel(); }
-    else if (reload) { loadStations(); if (state.selected) loadPanel(); }
+    else if (reload) { loadStations(); if (state.selected) { loadPanel(); loadTrack(); } }
   }
 
   const onDates = () => {
@@ -252,7 +533,11 @@
   $("end").addEventListener("change", onDates);
 
   // ---------------- toolbar
-  $("measurement").addEventListener("change", (e) => { state.measurement = e.target.value; loadStations(); if (state.selected) loadPanel(); });
+  $("measurement").addEventListener("change", (e) => {
+    state.measurement = e.target.value;
+    loadStations();
+    if (state.selected) { loadPanel(); loadTrack(); }
+  });
   $("ci").addEventListener("change", (e) => { state.ci = +e.target.value; if (state.selected) loadPanel(); });
   $("aggregation").value = state.aggregation;
   $("aggregation").addEventListener("change", (e) => { state.aggregation = e.target.value; if (state.selected) loadPanel(); });
@@ -261,8 +546,10 @@
   let timer = null;
   const playIcon = $("play").innerHTML;
   function stopPlaying() {
+    const wasRunning = timer !== null;
     clearInterval(timer);
     timer = null;
+    if (wasRunning) loadTrack();
     $("play").innerHTML = playIcon;
     $("play").setAttribute("aria-label", "Play through time");
   }
@@ -278,7 +565,7 @@
     const step = () => {
       const hi = Math.min(hi0, lo + width);
       setWindow(lo, hi, "panel");
-      if (hi >= hi0) { stopPlaying(); loadStations(); return; }
+      if (hi >= hi0) { stopPlaying(); loadStations(); loadTrack(); return; }
       lo += DAY;
     };
     step();
@@ -298,7 +585,7 @@
     ctx.fillStyle = "#132a3e";
     ctx.font = `600 ${22 * devicePixelRatio}px sans-serif`;
     const [from, to] = seriesWindow();
-    const st = [...state.features.map((f) => f.properties), ...state.unplaced].find((x) => x.code === state.selected);
+    const st = findStation(state.selected);
     ctx.fillText(`${st ? `${st.name} · ${st.code}` : state.selected} — ${label()}, ${from ? fmt.range(from, to) : "all readings"}`,
                  pad, pad + 20 * devicePixelRatio);
     ctx.drawImage(canvas, pad, pad + head);
@@ -310,7 +597,7 @@
   $("search").addEventListener("change", (e) => {
     const q = e.target.value.trim().toLowerCase();
     if (!q) return;
-    const all = [...state.features.map((f) => f.properties), ...state.unplaced];
+    const all = allStations();
     const hit = all.find((s) => `${s.name} · ${s.code}`.toLowerCase() === q)
       || all.find((s) => s.code.toLowerCase() === q || s.name.toLowerCase() === q)
       || all.find((s) => s.name.toLowerCase().includes(q) || s.code.toLowerCase().includes(q));

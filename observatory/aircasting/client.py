@@ -135,6 +135,25 @@ def normalise_package(value) -> str:
     return parts[0] + parts[1] + parts[2].lower() if len(parts) == 3 else str(value)
 
 
+def session_streams(streams) -> list[dict]:
+    """The streams of a session, however the endpoint that answered spelled them.
+
+    The fixed endpoint replies with a list keyed on ``stream_id``; the mobile one with a
+    dict of streams keyed by sensor name, each carrying ``id``. Both say the same thing,
+    and discovery wants one shape.
+    """
+    items = streams.values() if isinstance(streams, dict) else (streams or [])
+    found = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            found.append({"id": int(item.get("stream_id", item.get("id"))), "sensor_name": item.get("sensor_name")})
+        except (TypeError, ValueError):
+            continue
+    return found
+
+
 def valid_coordinates(lon, lat) -> bool:
     try:
         return (math.isfinite(float(lon)) and math.isfinite(float(lat))
@@ -285,6 +304,15 @@ class AirCastingDownloader:
         self.region_polygons = load_region(cfg.region_geojson)
         self.region_matches(0, 0)  # validate rectangle configuration
 
+    # Where to look for a session given only its number, in the order they are tried.
+    # The notebook only knew the fixed endpoint, which cannot answer for a mobile
+    # recording — and a mobile recording is exactly what a session id pasted from the
+    # map usually names.
+    SESSION_LOOKUPS = (
+        ("FixedSession", "/api/fixed/sessions/{sid}/streams.json", {"measurements_limit": 0}),
+        ("MobileSession", "/api/mobile/sessions2/{sid}.json", {}),
+    )
+
     # ---- section 2b
     def test_access(self, days=365):
         end = datetime.now() + timedelta(days=1)
@@ -302,14 +330,16 @@ class AirCastingDownloader:
             except Exception as error:  # noqa: BLE001 - report every failure to the UI
                 results.append({"query": package, "ok": False, "result": "Error", "detail": str(error)})
         for sid in self.cfg.known_session_ids:
-            try:
-                info = self.client.get(f"/api/fixed/sessions/{int(sid)}/streams.json", {"measurements_limit": 0}, refresh=True)
-                streams = info.get("streams", [])
-                results.append({"query": f"session {sid}", "ok": True,
-                                "result": f"'{info.get('title', '')}', {len(streams)} streams",
-                                "detail": ", ".join(f"{s.get('sensor_name')}={s.get('stream_id')}" for s in streams)})
-            except Exception as error:  # noqa: BLE001
-                results.append({"query": f"session {sid}", "ok": False, "result": "Error", "detail": str(error)})
+            session, notes = self.lookup_session(int(sid), refresh=True)
+            if not session:
+                results.append({"query": f"session {sid}", "ok": False, "result": "Error", "detail": "; ".join(notes)})
+                continue
+            # Saying which kind it is matters: a mobile recording is a track, and someone
+            # expecting a fixed station would otherwise wonder why the map point moves.
+            kind = "mobile" if session["type"] == "MobileSession" else "fixed"
+            results.append({"query": f"session {sid}", "ok": True,
+                            "result": f"'{session['title']}', {kind}, {len(session['streams'])} streams",
+                            "detail": ", ".join(f"{s['sensor_name']}={s['id']}" for s in session["streams"])})
         return results
 
     # ---- section 4
@@ -344,19 +374,49 @@ class AirCastingDownloader:
                     errors.append({"device_query": package, "start": start.isoformat(), "stop": stop.isoformat(), "error": str(error)})
         return sorted(sessions.values(), key=lambda x: x["id"]), errors
 
+    def lookup_session(self, sid: int, refresh: bool = False) -> tuple[dict | None, list[str]]:
+        """Find a session by its number alone, whether it was recorded fixed or mobile.
+
+        A session id copied from a map link says nothing about how the recording was made,
+        so both kinds are asked in turn and the first that answers wins. An endpoint that
+        replies without any streams has not found the session either — which is how the
+        fixed endpoint answers for a mobile recording — so that counts as a miss rather
+        than as an empty session.
+
+        Returns the session in the shape :meth:`discover_sessions` produces, together with
+        what each endpoint said when it could not answer.
+        """
+        notes = []
+        for kind, path, params in self.SESSION_LOOKUPS:
+            try:
+                info = self.client.get(path.format(sid=sid), dict(params), refresh=refresh)
+            except Exception as error:  # noqa: BLE001 - ask the other kind before giving up
+                notes.append(f"{kind}: {error}")
+                continue
+            streams = session_streams(info.get("streams") if isinstance(info, dict) else None)
+            if not streams:
+                notes.append(f"{kind}: no streams returned")
+                continue
+            start = (info.get("start_datetime") or info.get("start_time_local")
+                     or info.get("start_time") or self.cfg.discovery_start)
+            return {"id": int(sid), "type": kind, "title": info.get("title", ""), "start_datetime": start,
+                    # Named by hand rather than found through a device query, so there is
+                    # no package association to check the recording against later.
+                    "device_queries": [], "streams": streams}, notes
+        return None, notes
+
     def add_known_sessions(self, found, errors):
+        """Attach sessions named by number that the search did not return."""
         have = {int(s["id"]) for s in found}
         for sid in self.cfg.known_session_ids:
             if int(sid) in have:
                 continue
-            try:
-                info = self.client.get(f"/api/fixed/sessions/{int(sid)}/streams.json", {"measurements_limit": 0})
-                start = info.get("start_datetime") or info.get("start_time_local") or info.get("start_time") or self.cfg.discovery_start
-                found.append({"id": int(sid), "type": "FixedSession", "title": info.get("title", ""),
-                              "start_datetime": start, "device_queries": [],
-                              "streams": [{"id": int(s["stream_id"]), "sensor_name": s.get("sensor_name")} for s in info.get("streams", [])]})
-            except Exception as error:  # noqa: BLE001
-                errors.append({"device_query": f"known_session:{sid}", "error": str(error)})
+            session, notes = self.lookup_session(int(sid))
+            if session:
+                found.append(session)
+            else:
+                errors.append({"device_query": f"known_session:{sid}",
+                               "error": "; ".join(notes) or "Session not found"})
         return sorted(found, key=lambda x: int(x["id"])), errors
 
     # ---- section 5

@@ -173,6 +173,25 @@
   <div id="orphans" class="small muted" style="margin-top:12px">Not checked yet.</div>
 </section>
 
+{% comment %}
+  Readings whose GPS put them somewhere the project does not cover. Kept next to the
+  housekeeping card because both remove stored data, and both check before they do.
+{% endcomment %}
+<section class="card card-pad" style="margin-top:16px" aria-labelledby="region-title">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap">
+    <div style="max-width:74ch">
+      <h2 id="region-title" style="margin:0 0 6px">Readings taken outside {{ region_name }}</h2>
+      <p class="muted" style="margin:0">Imports already drop these, so this is for readings stored before that check
+        existed. A sensor without a GPS fix reports a default position &mdash; often the app&rsquo;s own, on another
+        continent &mdash; and those points put a marker where the project does not reach. Readings with no coordinates
+        at all are never touched: an indoor session has its position withheld, which is not the same as being
+        somewhere else.</p>
+    </div>
+    <button class="btn btn-danger" id="purge-outside-region" type="button">{% icon "pin" %}Check and remove</button>
+  </div>
+  <div id="outside-region" class="small muted" style="margin-top:12px">Not checked yet.</div>
+</section>
+
 <section class="card notice" style="margin-top:16px" aria-live="polite" id="notice">
   <span class="check" id="n-icon">{% icon "check" %}</span>
   <strong id="n-title">No imports yet</strong>
