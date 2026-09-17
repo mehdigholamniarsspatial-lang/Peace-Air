@@ -29,6 +29,7 @@ ICONS = {
     "trash": '<path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/>',
     "info": '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/>',
     "play": '<path d="M7 4.5v15l12-7.5z" fill="currentColor"/>',
+    "chevron": '<path d="m9 6 6 6-6 6"/>',
     "leaf": '',
 }
 
@@ -45,3 +46,31 @@ def thousands(value):
         return f"{int(value):,}"
     except (TypeError, ValueError):
         return value
+
+
+# --------------------------------------------------------------------------- survey fields
+# One place that builds every survey control, so the accessibility scaffolding — a label
+# per input, a fieldset and legend per group, errors tied on with aria-describedby — is
+# identical on all of them and cannot drift question by question.
+
+@register.inclusion_tag("observatory/includes/survey_error.html")
+def error(field, slug):
+    return {"field": field, "slug": slug}
+
+
+@register.inclusion_tag("observatory/includes/survey_checkbox.html")
+def checkbox(field, id, text=""):
+    return {"field": field, "id": id, "text": text or field.label, "slug": id.replace("id_", "").replace("_", "-")}
+
+
+@register.inclusion_tag("observatory/includes/survey_radiogroup.html")
+def radiogroup(field, name, legend):
+    return {"field": field, "name": name, "legend": legend,
+            "slug": name.replace("_", "-"), "selected": field.value()}
+
+
+@register.inclusion_tag("observatory/includes/survey_checkgroup.html")
+def checkgroup(field, name, legend, limit=None):
+    chosen = field.value() or []
+    return {"field": field, "name": name, "legend": legend, "limit": limit,
+            "slug": name.replace("_", "-"), "chosen": [str(v) for v in chosen]}

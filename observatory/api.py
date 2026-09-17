@@ -176,7 +176,14 @@ def datasets_delete(request):
 
 @require_GET
 def devices(request):
-    """The registered sensors, so the Data manager can list them alongside the datasets."""
+    """The registered sensors, so the Data manager can list them alongside the datasets.
+
+    Administrators only, like the page it feeds: sensor identifiers and download errors
+    would otherwise still be readable as JSON after the page itself was closed.
+    """
+    denied = _superuser_only(request)
+    if denied:
+        return denied
     rows = []
     for device in AirCastingDevice.objects.select_related("station").order_by("device_id"):
         # A sensor usually has no station FK: imports match it by source identity instead,
@@ -311,4 +318,8 @@ def schedule(request):
 
 @require_GET
 def imports(request):
+    """The import and deletion log — administrators only, like the Reports page."""
+    denied = _superuser_only(request)
+    if denied:
+        return denied
     return JsonResponse({"results": [_run_json(r) for r in ImportRun.objects.all()[:20]]})

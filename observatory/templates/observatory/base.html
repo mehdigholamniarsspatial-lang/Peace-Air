@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Air Quality Observatory{% endblock %}</title>
   {% block meta %}{% endblock %}
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap">
+  {% block webfont %}<link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap">{% endblock %}
   <link rel="stylesheet" href="{% static 'observatory/css/app.css' %}">
   {% block head %}{% endblock %}
 </head>
@@ -20,12 +20,15 @@
     </a>
     <nav class="nav" aria-label="Main">
       <a href="{% url 'map' %}" {% if nav == 'map' %}aria-current="page"{% endif %}>{% icon "pin" %}Map explorer</a>
-      <a href="{% url 'data' %}" {% if nav == 'data' %}aria-current="page"{% endif %}>{% icon "database" %}Data manager</a>
-      <a href="{% url 'reports' %}" {% if nav == 'reports' %}aria-current="page"{% endif %}>{% icon "doc" %}Reports</a>
+      {% if user.is_superuser %}<a href="{% url 'data' %}" {% if nav == 'data' %}aria-current="page"{% endif %}>{% icon "database" %}Data manager</a>{% endif %}
+      {% if user.is_superuser %}<a href="{% url 'reports' %}" {% if nav == 'reports' %}aria-current="page"{% endif %}>{% icon "doc" %}Reports</a>{% endif %}
+      <a href="{% url 'feedback' %}" {% if nav == 'feedback' %}aria-current="page"{% endif %}>{% icon "info" %}Feedback survey</a>
     </nav>
     <nav class="nav nav-bottom" aria-label="Account">
+      {# The only route to Django's admin, where survey responses and raw records live. #}
+      {% if user.is_superuser %}<a href="{% url 'admin:index' %}">{% icon "gear" %}Admin panel</a>{% endif %}
       {% if user.is_authenticated %}<form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="nav-action" type="submit">{% icon "export" %}Sign out</button></form>
-      {% else %}<a href="{% url 'login' %}?next={{ request.path|urlencode }}">{% icon "export" %}Sign in</a>{% endif %}
+      {% else %}<a href="{% url 'login' %}">{% icon "export" %}Sign in</a>{% endif %}
     </nav>
   </aside>
   <main class="main">

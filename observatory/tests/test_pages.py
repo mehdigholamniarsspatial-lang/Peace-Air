@@ -9,7 +9,7 @@ from observatory.models import Station
 
 class DataManagerPageTests(TestCase):
     def setUp(self):
-        self.client.force_login(get_user_model().objects.create_user("viewer"))
+        self.client.force_login(get_user_model().objects.create_superuser("viewer", password="t"))
 
     def test_default_region_is_ireland_and_region_options_are_distinct(self):
         Station.objects.create(code="A", name="Alpha", region="Ireland")

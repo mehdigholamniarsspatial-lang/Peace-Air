@@ -5,8 +5,8 @@
 <header class="page-head">
   <div><h1>Data manager</h1><p>Manage sensor imports and downloadable datasets</p></div>
   <div class="actions">
-    <button class="btn" id="sync" type="button"{% if not user.is_superuser %} data-login-url="{% url 'login' %}?next={% url 'data' %}"{% endif %}>{% icon "sync" %}Run sync</button>
-    <button class="btn btn-primary" id="import-btn" type="button"{% if not user.is_superuser %} data-login-url="{% url 'login' %}?next={% url 'data' %}"{% endif %}>{% icon "upload" %}Import data</button>
+    <button class="btn" id="sync" type="button">{% icon "sync" %}Run sync</button>
+    <button class="btn btn-primary" id="import-btn" type="button">{% icon "upload" %}Import data</button>
   </div>
 </header>
 
@@ -29,7 +29,7 @@
         <h3>Add sensor records</h3>
         <p class="muted" style="margin:0 0 14px">Drop a CSV file here or browse files</p>
         <label class="btn btn-sm" for="file" style="padding:8px 24px">Browse files</label>
-        <input type="file" id="file" accept=".csv,text/csv" class="visually-hidden"{% if not user.is_superuser %} disabled{% endif %}>
+        <input type="file" id="file" accept=".csv,text/csv" class="visually-hidden">
         <p class="small muted" style="margin:12px 0 0">AirCasting exports or <code>station, time, measurement, value</code> [, unit, latitude, longitude]</p>
       </div>
     </div>
@@ -70,7 +70,7 @@
   <p class="muted" style="max-width:74ch">Each sync runs the notebook's downloader for these sensor IDs: it searches the
     spellings of the ID, adds any known sessions and downloads recordings for the period below. Adding a sensor starts
     its first download straight away. Use only your project's devices or authorised tags.</p>
-  <form method="post" action="{% url 'device_add' %}" class="form-grid" style="margin:16px 0"{% if not user.is_superuser %} onsubmit="location.href='{% url 'login' %}?next={% url 'data' %}';return false"{% endif %}>
+  <form method="post" action="{% url 'device_add' %}" class="form-grid" style="margin:16px 0">
     {% csrf_token %}
     <label class="field"><span>Device ID</span><input class="input" name="device_id" required placeholder="AIRBEAM3:B0B21C7627C4"></label>
     <label class="field"><span>Label</span><input class="input" name="label" placeholder="Office window"></label>
@@ -95,10 +95,8 @@
       <td>{{ d.last_success|date:"j M Y, H:i"|default:"Never" }}
         {% if d.last_error %}<div class="small" style="color:var(--danger,#b42318)">{{ d.last_error|truncatechars:120 }}</div>{% endif %}</td>
       <td style="white-space:nowrap">
-        <form method="post" action="{% url 'device_test' d.pk %}" style="display:inline"{% if not user.is_superuser %} onsubmit="location.href='{% url 'login' %}?next={% url 'data' %}';return false"{% endif %}>{% csrf_token %}<button class="btn btn-sm">Test access</button></form>
-        <form method="post" action="{% url 'device_delete' d.pk %}" style="display:inline" onsubmit="{% if not user.is_superuser %}location.href='{% url 'login' %}?next={% url 'data' %}';return false{% else %}return confirm('Permanently remove {{ d.device_id|escapejs }}?
-
-Its stations, stored readings, weekly datasets and downloaded AirCasting files are all deleted. This cannot be undone.'){% endif %}">{% csrf_token %}<button class="btn btn-sm btn-danger">Remove</button></form>
+        <form method="post" action="{% url 'device_test' d.pk %}" style="display:inline">{% csrf_token %}<button class="btn btn-sm">Test access</button></form>
+        <form method="post" action="{% url 'device_delete' d.pk %}" style="display:inline" onsubmit="return confirm('Permanently remove {{ d.device_id|escapejs }}?\n\nIts stations, stored readings, weekly datasets and downloaded AirCasting files are all deleted. This cannot be undone.')">{% csrf_token %}<button class="btn btn-sm btn-danger">Remove</button></form>
       </td>
     </tr>{% endfor %}</tbody>
   </table></div>
@@ -121,7 +119,7 @@ Its stations, stored readings, weekly datasets and downloaded AirCasting files a
     the files behind them; the removal is listed in <a href="{% url 'reports' %}">Update reports</a>.</p>
   {% for s in stations %}
   <div class="inline-form" style="padding:10px 0;border-top:1px solid var(--line)">
-    <form method="post" action="{% url 'station_update' s.code %}" class="inline-form" style="flex:1;padding:0;border:0"{% if not user.is_superuser %} onsubmit="location.href='{% url 'login' %}?next={% url 'data' %}';return false"{% endif %}>
+    <form method="post" action="{% url 'station_update' s.code %}" class="inline-form" style="flex:1;padding:0;border:0">
       {% csrf_token %}
       <div><label class="visually-hidden" for="n-{{ s.pk }}">Name</label><input id="n-{{ s.pk }}" class="input" name="name" value="{{ s.name }}" required style="width:100%">
         <div class="small muted" style="margin-top:4px">{{ s.code }} · {{ s.reading_count|thousands }} readings · {% if s.has_location %}<span class="pill">{{ s.get_location_source_display }}</span>{% else %}<span class="pill warn">No location</span>{% endif %}{% if s.is_indoor %} <span class="pill">Indoor</span>{% endif %}
@@ -131,7 +129,7 @@ Its stations, stored readings, weekly datasets and downloaded AirCasting files a
       <input class="input" name="longitude" value="{{ s.longitude|default_if_none:'' }}" aria-label="Longitude" placeholder="Longitude" inputmode="decimal">
       <button class="btn btn-sm" type="submit">Save</button>
     </form>
-    <form method="post" action="{% url 'station_delete' s.code %}" style="display:inline" onsubmit="{% if not user.is_superuser %}location.href='{% url 'login' %}?next={% url 'data' %}';return false{% else %}return confirm('Permanently delete {{ s.name|escapejs }} ({{ s.code|escapejs }})?\n\n{{ s.reading_count|thousands }} stored readings and every weekly dataset for this station are removed from the database and from disk. This cannot be undone.'){% endif %}">{% csrf_token %}<button class="btn btn-sm btn-danger" type="submit">Delete station</button></form>
+    <form method="post" action="{% url 'station_delete' s.code %}" style="display:inline" onsubmit="return confirm('Permanently delete {{ s.name|escapejs }} ({{ s.code|escapejs }})?\n\n{{ s.reading_count|thousands }} stored readings and every weekly dataset for this station are removed from the database and from disk. This cannot be undone.')">{% csrf_token %}<button class="btn btn-sm btn-danger" type="submit">Delete station</button></form>
   </div>
   {% empty %}<p class="muted">No stations yet.</p>{% endfor %}
 </section>
@@ -145,7 +143,7 @@ Its stations, stored readings, weekly datasets and downloaded AirCasting files a
     <label class="visually-hidden" for="period">Week</label>
     <select id="period" class="select"><option value="">Date</option></select>
     <button class="btn btn-quiet" id="download-selected" type="button" disabled>{% icon "download" %}Download selected</button>
-    <button class="btn btn-danger" id="delete-selected" type="button" disabled{% if not user.is_superuser %} data-login-url="{% url 'login' %}?next={% url 'data' %}"{% endif %}>{% icon "trash" %}Delete selected</button>
+    <button class="btn btn-danger" id="delete-selected" type="button" disabled>{% icon "trash" %}Delete selected</button>
   </div>
   <div class="table-wrap">
     <table class="data">
@@ -170,7 +168,7 @@ Its stations, stored readings, weekly datasets and downloaded AirCasting files a
         under the data folder &mdash; reading files for a deleted station, source CSVs nothing is built from any more,
         downloads cached for an unregistered sensor &mdash; cannot be reached from any page and is removed here.</p>
     </div>
-    <button class="btn btn-danger" id="purge-orphans" type="button"{% if not user.is_superuser %} data-login-url="{% url 'login' %}?next={% url 'data' %}"{% endif %}>{% icon "trash" %}Check and remove</button>
+    <button class="btn btn-danger" id="purge-orphans" type="button">{% icon "trash" %}Check and remove</button>
   </div>
   <div id="orphans" class="small muted" style="margin-top:12px">Not checked yet.</div>
 </section>

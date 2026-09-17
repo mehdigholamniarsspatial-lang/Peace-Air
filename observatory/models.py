@@ -10,6 +10,8 @@ from datetime import date, timedelta
 from django.db import models
 from django.utils import timezone
 
+from . import survey
+
 
 class Station(models.Model):
     LOCATION_SOURCES = [
@@ -156,3 +158,55 @@ class ScheduleConfig(models.Model):
         base = self.last_run or timezone.now()
         nxt = base + timedelta(minutes=self.interval_minutes)
         return max(nxt, timezone.now()) if self.last_run else nxt
+
+
+class SurveyResponse(models.Model):
+    """One citizen's answers to the feedback survey.
+
+    Anonymous by design: the most specific thing here is a county. There is deliberately
+    no foreign key to :class:`SurveyContact` and no shared identifier — a respondent who
+    asks for the results must not become re-identifiable through the answers they gave.
+    """
+    schema_version = models.CharField(max_length=8, default=survey.SCHEMA_VERSION)
+    submitted_at = models.DateTimeField(default=timezone.now)
+    consent_given = models.BooleanField()
+    age_confirmed = models.BooleanField()
+    consent_text_version = models.CharField(max_length=8, default=survey.CONSENT_TEXT_VERSION)
+
+    county = models.CharField(max_length=32)
+    area_type = models.CharField(max_length=32)
+    near_border = models.BooleanField(default=False)
+    air_quality_rating = models.CharField(max_length=32)
+    pollution_sources = models.JSONField(default=list, blank=True)
+    dashboard_usefulness = models.CharField(max_length=32)
+    dashboard_improvements = models.JSONField(default=list, blank=True)
+    dashboard_improvements_other = models.CharField(max_length=120, blank=True)
+    sensor_trust = models.CharField(max_length=32)
+    trust_concerns = models.JSONField(default=list, blank=True)
+    participation = models.JSONField(default=list, blank=True)
+    open_data_support = models.CharField(max_length=32)
+    additional_comments = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-submitted_at"]
+
+    def __str__(self):
+        return f"Feedback {self.submitted_at:%Y-%m-%d %H:%M} ({self.county})"
+
+
+class SurveyContact(models.Model):
+    """An address someone gave to receive the results, and nothing else.
+
+    A row exists only when the respondent opted in. It stores a *date* rather than a
+    timestamp on purpose: submission times are precise enough to pair a contact with the
+    answers filed at the same instant, which is exactly the link that must not exist.
+    Delete these once the summary has been circulated.
+    """
+    email = models.EmailField()
+    created_on = models.DateField(default=date.today)
+
+    class Meta:
+        ordering = ["-created_on"]
+
+    def __str__(self):
+        return self.email

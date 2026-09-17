@@ -1,0 +1,12 @@
+<fieldset class="survey-group" data-group="{{ name }}"{% if limit %} data-limit="{{ limit }}"{% endif %}>
+  <legend>{{ legend }}</legend>
+  {% include "observatory/includes/survey_error.html" with field=field slug=slug %}
+  {% if limit %}<p class="muted small" id="limit-{{ slug }}" aria-live="polite">Choose up to {{ limit }}</p>{% endif %}
+  {% for value, text in field.field.choices %}
+  <label class="survey-check">
+    <input type="checkbox" name="{{ name }}" value="{{ value }}"{% if value in chosen %} checked{% endif %}
+           aria-describedby="{% if limit %}limit-{{ slug }}{% endif %}{% if field.errors %} err-{{ slug }}{% endif %}"{% if field.errors %} aria-invalid="true"{% endif %}>
+    <span>{{ text }}</span>
+  </label>
+  {% endfor %}
+</fieldset>

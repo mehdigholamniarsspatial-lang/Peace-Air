@@ -341,3 +341,66 @@ table.data input[type="checkbox"] { width: 18px; height: 18px; accent-color: var
   .about-stats { grid-template-columns: 1fr; }
   .about-hero-logo { margin-bottom: 20px; }
 }
+
+/* ---------- citizen feedback survey
+   Touch targets stay at 44px and focus is always visible: this page is public, filled in
+   on phones, and often by people who will never see the rest of the dashboard. */
+.survey { max-width: 760px; margin: 0 auto 40px; }
+.survey .page-head { margin-bottom: 14px; }
+.survey h1 { font-size: 30px; line-height: 1.2; }
+.survey-block { margin-top: 14px; }
+.survey-block h2 { font-size: 20px; margin: 0 0 4px; }
+.survey-help { margin: 0 0 10px; }
+.survey-field { margin-top: 12px; }
+.survey-field > label { font-weight: 600; }
+.survey-textarea { height: auto; padding: 10px 12px; line-height: 1.45; resize: vertical; font: inherit; }
+
+.survey-group { border: 0; padding: 0; margin: 14px 0 0; min-width: 0; }
+.survey-group legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
+.survey-check { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 2px 8px 2px 2px;
+                border-radius: var(--radius-sm); cursor: pointer; }
+.survey-check:hover { background: var(--teal-soft); }
+.survey-check input { width: 22px; height: 22px; flex: none; accent-color: var(--teal); cursor: pointer; }
+.survey-check input:disabled { cursor: not-allowed; }
+.survey-check input:disabled + span { color: var(--muted); }
+.survey-check:focus-within { outline: 2px solid var(--teal); outline-offset: 1px; }
+
+/* Errors are never signalled by colour alone: each carries a "Error:" prefix and a mark. */
+.survey-error { color: #93302a; background: #fbe4e2; border-left: 4px solid var(--red);
+                padding: 8px 12px; border-radius: var(--radius-sm); margin: 0 0 8px; font-weight: 600; }
+.survey-error::before { content: "Error: "; }
+.survey-error-summary { color: #93302a; background: #fbe4e2; border-left: 4px solid var(--red);
+                        padding: 12px 14px; border-radius: var(--radius-sm); font-weight: 600; margin: 0 0 4px; }
+.survey-status:empty { display: none; }
+[aria-invalid="true"].input, [aria-invalid="true"].select { border-color: var(--red); border-width: 2px; }
+
+/* The notice arrives collapsed, so the summary has to read as something you can open:
+   a chevron that turns, a "Show"/"Hide" word, and a hover state on the whole row. */
+.survey-privacy { margin-top: 4px; }
+.survey-privacy summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 10px;
+                          list-style: none; border-radius: var(--radius-sm); padding: 2px 4px; }
+.survey-privacy summary::-webkit-details-marker { display: none; }
+.survey-privacy summary:hover { color: var(--teal-strong); background: var(--teal-soft); }
+.survey-privacy summary:hover .survey-privacy-toggle { text-decoration: underline; }
+.survey-privacy-chev { display: flex; color: var(--teal-strong); }
+.survey-privacy-chev svg { width: 18px; height: 18px; transition: transform .15s ease; }
+.survey-privacy[open] .survey-privacy-chev svg { transform: rotate(90deg); }
+.survey-privacy-toggle { margin-left: auto; color: var(--teal-strong); font-weight: 600; white-space: nowrap; }
+.survey-privacy-toggle::after { content: "Show"; }
+.survey-privacy[open] .survey-privacy-toggle::after { content: "Hide"; }
+@media (prefers-reduced-motion: reduce) { .survey-privacy-chev svg { transition: none; } }
+.survey-privacy-body h2 { font-size: 16px; margin: 14px 0 2px; }
+.survey-privacy-body p { margin: 0; color: var(--ink-2); }
+
+.survey-submit { margin-top: 18px; display: grid; gap: 8px; justify-items: start; }
+.btn-lg { height: 52px; padding: 0 30px; font-size: 17px; }
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+.survey-done h1 { font-size: 26px; margin-top: 0; }
+.survey-pending { display: inline-flex; align-items: center; gap: 10px; }
+
+:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+@media (max-width: 720px) {
+  .survey h1 { font-size: 25px; }
+  .survey-check { padding-left: 0; }
+}

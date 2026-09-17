@@ -13,6 +13,8 @@ urlpatterns = [
     path("map/", views.map_explorer, name="map"),
     path("data/", views.data_manager, name="data"),
     path("reports/", views.reports, name="reports"),
+    path("feedback/", views.feedback, name="feedback"),
+    path("after-login/", views.after_login, name="after_login"),
 
     # Station analysis now lives inside the map explorer, and Settings inside the data
     # manager; both keep redirecting so existing links and bookmarks still land somewhere.

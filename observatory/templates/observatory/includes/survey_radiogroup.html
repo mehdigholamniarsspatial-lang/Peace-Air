@@ -1,0 +1,11 @@
+<fieldset class="survey-group">
+  <legend>{{ legend }}</legend>
+  {% include "observatory/includes/survey_error.html" with field=field slug=slug %}
+  {% for value, text in field.field.choices %}
+  <label class="survey-check">
+    <input type="radio" name="{{ name }}" value="{{ value }}"{% if selected == value %} checked{% endif %}
+           {% if field.errors %}aria-invalid="true" aria-describedby="err-{{ slug }}"{% endif %}>
+    <span>{{ text }}</span>
+  </label>
+  {% endfor %}
+</fieldset>

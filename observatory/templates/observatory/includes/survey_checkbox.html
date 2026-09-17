@@ -1,0 +1,6 @@
+{% include "observatory/includes/survey_error.html" with field=field slug=slug %}
+<label class="survey-check">
+  <input type="checkbox" name="{{ field.name }}" id="{{ id }}"{% if field.value %} checked{% endif %}
+         {% if field.errors %}aria-invalid="true" aria-describedby="err-{{ slug }}"{% endif %}>
+  <span>{{ text }}</span>
+</label>

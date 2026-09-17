@@ -1,0 +1,175 @@
+{% extends "observatory/base.html" %}{% load static obs %}
+{% block title %}Citizen Feedback Survey · PEACE-Air{% endblock %}
+{% block meta %}<meta name="description" content="Tell us what you think about air quality where you live, about low-cost sensor data, and about the PEACE-Air dashboard.">{% endblock %}
+{# No web font: this page must make no third-party requests. #}
+{% block webfont %}{% endblock %}
+{% block content %}
+<article class="survey">
+
+{% if submitted %}
+  <div class="card card-pad survey-done" role="status">
+    <h1>Thank you. Your answers help make the case for cleaner air across the island of Ireland.</h1>
+    <p class="muted">You can close this page. If you asked for a summary of the results we will email it once the
+      analysis is finished, and delete your address afterwards.</p>
+  </div>
+{% else %}
+
+  <header class="page-head"><div>
+    <h1>Air Quality Sensors and Data: Citizen Feedback Survey</h1>
+    <p>This takes 3–4 minutes. There are no right or wrong answers — we want your view.</p>
+  </div></header>
+
+  {% comment %}Closed on arrival so the first question is reachable without scrolling.
+  The chevron and the "Show" label make it plain that there is more behind it; the
+  summary carries the native expanded/collapsed state for screen readers.{% endcomment %}
+  <details class="card card-pad survey-privacy" id="privacy">
+    <summary>
+      <span class="survey-privacy-chev" aria-hidden="true">{% icon "chevron" %}</span>
+      <span><strong>Privacy information</strong> — who is collecting this, and what happens to it</span>
+      <span class="survey-privacy-toggle" aria-hidden="true"></span>
+    </summary>
+    <div class="survey-privacy-body">
+      <h2>Who is collecting this</h2>
+      <p>{{ controller }}, acting as data controller. Contact <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.</p>
+
+      <h2>Why</h2>
+      <p>To understand public views on air quality monitoring and dashboard data, and to shape future monitoring
+        and reporting.</p>
+
+      <h2>Legal basis</h2>
+      <p>Consent, under Article 6(1)(a) GDPR and the Data Protection Act 2018. Taking part is voluntary.</p>
+
+      <h2>What we collect</h2>
+      <p>Only the answers below. Anonymous by default: no name, address or date of birth. Location is county-level
+        only. Email is requested only if you opt in, and is stored separately from your answers.</p>
+
+      <h2>What we don't collect</h2>
+      <p>Health data, ethnicity, political opinions or other special category data.</p>
+
+      <h2>Who sees it</h2>
+      <p>The project team only. Findings are published in aggregated form; no individual response is identifiable.
+        Anonymised aggregates may be shared with project partners and public authorities.</p>
+
+      <h2>How long</h2>
+      <p>{{ retention_period }}, then securely deleted. Contact emails are deleted once results are circulated.</p>
+
+      <h2>Your rights</h2>
+      <p>Access, rectification, erasure, restriction, objection, portability, and withdrawal of consent at any time
+        without giving a reason. Note that once a response is fully anonymised and merged into the dataset it may no
+        longer be identifiable for removal.</p>
+
+      <h2>Complaints</h2>
+      <p>Data Protection Commission (Ireland), <a href="https://www.dataprotection.ie" rel="noopener">www.dataprotection.ie</a>
+        — or the Information Commissioner's Office if you are based in Northern Ireland.</p>
+    </div>
+  </details>
+
+  <div class="survey-status" aria-live="polite" id="form-status">
+    {% if form.errors %}<p class="survey-error-summary">Your answers were not sent. Please check the questions marked below.</p>{% endif %}
+  </div>
+
+  <form method="post" action="{% url 'feedback' %}" novalidate id="survey-form">
+    {% csrf_token %}
+
+    <section class="card card-pad survey-block">
+      <fieldset>
+        <legend>Before you start</legend>
+        {% checkbox form.consent id="id_consent" %}
+        {% checkbox form.age_confirm id="id_age_confirm" %}
+      </fieldset>
+    </section>
+
+    <section class="card card-pad survey-block">
+      <h2>1. Where are you answering from?</h2>
+      <p class="muted survey-help">This helps us compare views between areas. We only need a general location.</p>
+
+      <div class="field survey-field">
+        <label for="id_county">County</label>
+        {% error form.county "county" %}
+        <select name="county" id="id_county" class="select"{% if form.county.errors %} aria-invalid="true" aria-describedby="err-county"{% endif %}>
+          <option value="">Select a county…</option>
+          {% for group, options in county_groups %}<optgroup label="{{ group }}">
+            {% for value, text in options %}<option value="{{ value }}"{% if form.county.value == value %} selected{% endif %}>{{ text }}</option>{% endfor %}
+          </optgroup>{% endfor %}
+          <option value="prefer_not_say"{% if form.county.value == "prefer_not_say" %} selected{% endif %}>Prefer not to say</option>
+        </select>
+      </div>
+
+      {% radiogroup form.area_type "area_type" "What kind of area do you live in?" %}
+      {% checkbox form.near_border id="id_near_border" text="I live within about 20 km of the Ireland / Northern Ireland border" %}
+    </section>
+
+    <section class="card card-pad survey-block">
+      <h2>2. How would you describe the air quality where you live?</h2>
+      {% radiogroup form.air_quality_rating "air_quality_rating" "Air quality where you live" %}
+      {% checkgroup form.pollution_sources "pollution_sources" "Which of these do you think affect the air in your area? (tick all that apply)" %}
+    </section>
+
+    <section class="card card-pad survey-block">
+      <h2>3. How useful do you find the air quality dashboard?</h2>
+      <p class="muted survey-help">If you haven't used it before, choose the last option.</p>
+      {% radiogroup form.dashboard_usefulness "dashboard_usefulness" "How useful the dashboard is" %}
+      {% checkgroup form.dashboard_improvements "dashboard_improvements" "What would make the information more useful to you? (choose up to 3)" limit=3 %}
+
+      {% comment %}Revealed by the box that controls it, not by its own value: without
+      JavaScript a rejected submission would otherwise hide the field it asked you to
+      fill in.{% endcomment %}
+      <div class="field survey-field survey-conditional" id="wrap-improvements-other"{% if "other" not in improvements_chosen %} hidden{% endif %}>
+        <label for="id_dashboard_improvements_other">What else would help?</label>
+        {% error form.dashboard_improvements_other "improvements-other" %}
+        <input type="text" name="dashboard_improvements_other" id="id_dashboard_improvements_other" class="input"
+               maxlength="120" value="{{ form.dashboard_improvements_other.value|default_if_none:'' }}"
+               {% if form.dashboard_improvements_other.errors %}aria-invalid="true" aria-describedby="err-improvements-other"{% endif %}>
+      </div>
+    </section>
+
+    <section class="card card-pad survey-block">
+      <h2>4. How much do you trust the readings from local low-cost sensors?</h2>
+      {% radiogroup form.sensor_trust "sensor_trust" "How much you trust local sensor readings" %}
+      <div class="survey-conditional" id="wrap-trust-concerns"{% if form.sensor_trust.value not in trust_with_doubts %} hidden{% endif %}>
+        {% checkgroup form.trust_concerns "trust_concerns" "If you have any doubts, what are they about?" %}
+      </div>
+    </section>
+
+    <section class="card card-pad survey-block">
+      <h2>5. Would you take part in air quality monitoring yourself? (tick all that apply)</h2>
+      {% checkgroup form.participation "participation" "Ways you might take part" %}
+      {% radiogroup form.open_data_support "open_data_support" "Do you agree that sensor readings from your area should be published openly for anyone to see?" %}
+    </section>
+
+    <section class="card card-pad survey-block">
+      <h2>Anything else?</h2>
+      <div class="field survey-field">
+        <label for="id_additional_comments">Is there anything else you'd like to tell us about air quality or air quality monitoring in your area?</label>
+        <p class="muted survey-help" id="help-comments">{{ free_text_warning }}</p>
+        {% error form.additional_comments "comments" %}
+        <textarea name="additional_comments" id="id_additional_comments" class="input survey-textarea" rows="5"
+                  maxlength="1000" aria-describedby="help-comments count-comments">{{ form.additional_comments.value|default_if_none:'' }}</textarea>
+        <p class="muted small" id="count-comments" aria-live="polite">1000 characters remaining</p>
+      </div>
+    </section>
+
+    <section class="card card-pad survey-block">
+      <h2>Would you like the results?</h2>
+      {% checkbox form.wants_results id="id_wants_results" text="I would like a summary of the results" %}
+      <div class="field survey-field survey-conditional" id="wrap-contact-email"{% if not form.wants_results.value and not form.contact_email.errors %} hidden{% endif %}>
+        <label for="id_contact_email">Email address</label>
+        <p class="muted survey-help" id="help-email">Stored separately from your answers, used only to send you the
+          results, and deleted afterwards.</p>
+        {% error form.contact_email "contact-email" %}
+        <input type="email" name="contact_email" id="id_contact_email" class="input" autocomplete="email"
+               value="{{ form.contact_email.value|default_if_none:'' }}"
+               aria-describedby="help-email{% if form.contact_email.errors %} err-contact-email{% endif %}"
+               {% if form.contact_email.errors %}aria-invalid="true"{% endif %}>
+      </div>
+    </section>
+
+    <div class="survey-submit">
+      <button class="btn btn-primary btn-lg" type="submit" id="survey-submit">Send my answers</button>
+      <p class="muted small" id="submit-help">The button becomes available once you have ticked both boxes at the top.</p>
+    </div>
+  </form>
+{% endif %}
+</article>
+{% endblock %}
+{% block scripts %}{% if not submitted %}<script src="{% static 'observatory/js/survey.js' %}"></script>{% endif %}{% endblock %}

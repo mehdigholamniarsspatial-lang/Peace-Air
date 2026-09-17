@@ -69,7 +69,9 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LOGIN_URL = "login"
-LOGIN_REDIRECT_URL = "map"
+# Where signing in lands when no ?next was carried: see observatory.views.after_login,
+# which sends administrators to the data manager and everyone else to the map.
+LOGIN_REDIRECT_URL = "after_login"
 LOGOUT_REDIRECT_URL = "login"
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
