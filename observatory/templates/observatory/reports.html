@@ -1,0 +1,8 @@
+{% extends "observatory/base.html" %}
+{% block title %}Update reports · Air Quality Observatory{% endblock %}
+{% block head %}<meta http-equiv="refresh" content="30">{% endblock %}
+{% block content %}<header class="page-head"><div><h1>Update reports</h1><p>Automatic downloads, uploads and import results</p></div></header>
+<section class="card card-pad"><div class="table-wrap"><table class="data">
+  <thead><tr><th>Started</th><th>Source</th><th>Status</th><th>Read</th><th>Added</th><th>Duplicates</th><th>Removed</th><th>Details</th></tr></thead>
+  <tbody>{% for run in runs %}<tr><td>{{ run.started_at|date:"j M Y, H:i" }}</td><td>{{ run.get_source_display }}<div class="small muted">{{ run.filename }}</div></td><td><span class="status-dot {% if run.status == 'failed' %}fail{% elif run.status == 'partial' %}warn{% elif run.status == 'running' %}run{% endif %}"></span>{{ run.get_status_display }}</td><td>{{ run.rows_read }}</td><td>{{ run.rows_stored }}</td><td>{{ run.rows_duplicate }}</td><td>{{ run.rows_deleted }}</td><td class="small">{{ run.message|default:"–"|linebreaksbr }}</td></tr>{% empty %}<tr><td colspan="8" class="muted">No update reports yet.</td></tr>{% endfor %}</tbody>
+</table></div></section>{% endblock %}

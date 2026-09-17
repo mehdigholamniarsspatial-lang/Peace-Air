@@ -1,0 +1,5 @@
+Django>=5.0
+pandas>=2.1
+numpy>=1.26
+scipy>=1.11   # optional: exact t quantiles for confidence intervals (a close approximation is used without it)
+tzdata; sys_platform == "win32"

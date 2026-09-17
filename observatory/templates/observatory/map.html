@@ -1,0 +1,93 @@
+{% extends "observatory/base.html" %}{% load static obs %}
+{% block title %}Station explorer · Air Quality Observatory{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'observatory/vendor/leaflet/leaflet.css' %}">{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>Station explorer</h1><p>Explore air quality across Ireland</p></div>
+  <div class="actions">
+    <button class="btn" id="download-chart" type="button">{% icon "download" %}Download chart</button>
+    <a class="btn btn-primary" id="export" href="#" aria-disabled="true">{% icon "export" %}Export CSV</a>
+  </div>
+</header>
+
+<section class="card map-toolbar" aria-label="Map filters">
+  <div class="input-icon">{% icon "search" %}
+    <label class="visually-hidden" for="search">Find a station</label>
+    <input id="search" class="input" list="station-list" placeholder="Find a station (e.g. Galway, GW-014)…" autocomplete="off">
+    <datalist id="station-list"></datalist>
+  </div>
+  <label class="inline" for="measurement">Measurement</label>
+  <select id="measurement" class="select"><option value="PM2.5">PM2.5</option></select>
+  <label class="inline" for="aggregation">Aggregation</label>
+  <select id="aggregation" class="select">
+    <option value="auto" selected>Automatic</option>
+    <option value="raw">Individual readings</option><option value="10min">10-minute mean</option>
+    <option value="hourly">Hourly mean</option><option value="6h">6-hour mean</option><option value="daily">Daily mean</option>
+  </select>
+</section>
+
+<div class="explorer">
+  <section class="card map-card" aria-label="Map">
+    <div id="map" data-tiles="{{ tile_url }}" data-attribution="{{ tile_attribution }}"></div>
+    <div class="map-chip" id="count-chip">Loading stations…</div>
+    <div class="unplaced" id="unplaced" hidden></div>
+  </section>
+
+  <aside class="side" aria-live="polite">
+    <div class="card side-title">
+      <h2 id="st-title">Select a station</h2>
+      <div class="muted" id="st-sub">Click a point on the map to see its readings.</div>
+      <div class="mini-metrics">
+        <div class="card"><div class="small muted" id="m-latest-label">Latest</div><div class="v" id="m-latest">–</div></div>
+        <div class="card"><div class="small muted" id="m-mean-label">Mean</div><div class="v" id="m-mean">–</div></div>
+        <div class="card"><div class="small muted">Readings</div><div class="v" id="m-count">–</div></div>
+      </div>
+    </div>
+    <div class="card chart-card">
+      <div class="chart-head">
+        <h3 id="series-title">PM2.5 over time</h3>
+        <div class="legend"><span><i class="line"></i><span id="agg-label">Hourly mean</span></span><span id="ci-legend"><i class="band"></i><span id="ci-label">95% CI</span></span></div>
+        <label class="visually-hidden" for="ci">Mean confidence interval</label>
+        <select id="ci" class="select" style="height:34px;font-size:14px"><option value="90">Mean CI: 90%</option><option value="95" selected>Mean CI: 95%</option><option value="99">Mean CI: 99%</option></select>
+      </div>
+      <div class="time-strip">
+        <div class="time-strip-dates">
+          <label class="visually-hidden" for="start">Start date</label>
+          <input type="date" id="start" class="input">
+          <span class="muted">to</span>
+          <label class="visually-hidden" for="end">End date</label>
+          <input type="date" id="end" class="input">
+          <span class="muted small" id="days">–</span>
+        </div>
+        <div class="time-strip-slider">
+          <button class="play" id="play" type="button" aria-label="Play through time">{% icon "play" %}</button>
+          <div class="range-wrap"><div id="window-slider"></div></div>
+        </div>
+      </div>
+      <div class="chart-box"><canvas id="series" aria-label="Time series chart" role="img"></canvas><div class="chart-empty" id="series-empty">Select a station to plot its readings.</div></div>
+    </div>
+    <div class="card chart-card">
+      <div class="chart-head"><h3>Reading distribution</h3><span class="legend"><span><i class="median"></i><span id="median-label">Median</span></span></span></div>
+      <div class="chart-box"><canvas id="hist" aria-label="Histogram" role="img"></canvas><div class="chart-empty" id="hist-empty"></div></div>
+    </div>
+  </aside>
+</div>
+
+<p class="muted small" id="stats-note" style="margin:16px 0 -4px">Select a station to see its statistics.</p>
+<section class="stats-row" aria-label="Descriptive statistics">
+  <div class="card stat">{% icon "bars" %}<span class="stat-label">Mean</span><span class="stat-value" id="s-mean">–</span><span class="stat-sub" id="s-mean-ci">–</span></div>
+  <div class="card stat">{% icon "trend" %}<span class="stat-label">Median</span><span class="stat-value" id="s-median">–</span><span class="stat-sub" data-period>–</span></div>
+  <div class="card stat">{% icon "down" %}<span class="stat-label">Minimum</span><span class="stat-value" id="s-min">–</span><span class="stat-sub" data-period>–</span></div>
+  <div class="card stat">{% icon "up" %}<span class="stat-label">Maximum</span><span class="stat-value" id="s-max">–</span><span class="stat-sub" data-period>–</span></div>
+  <div class="card stat">{% icon "sigma" %}<span class="stat-label">Std. deviation</span><span class="stat-value" id="s-std">–</span><span class="stat-sub" id="s-iqr">–</span></div>
+  <div class="card stat">{% icon "doc" %}<span class="stat-label">Readings</span><span class="stat-value" id="s-count">–</span><span class="stat-sub" data-period>–</span></div>
+</section>
+
+{{ initial_station|json_script:"initial-station" }}
+{% endblock %}
+{% block scripts %}
+<script src="{% static 'observatory/vendor/leaflet/leaflet.js' %}"></script>
+<script src="{% static 'observatory/vendor/chartjs/chart.umd.js' %}"></script>
+<script src="{% static 'observatory/js/charts.js' %}"></script>
+<script src="{% static 'observatory/js/map.js' %}"></script>
+{% endblock %}

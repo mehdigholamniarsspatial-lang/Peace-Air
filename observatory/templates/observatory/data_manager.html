@@ -1,0 +1,185 @@
+{% extends "observatory/base.html" %}{% load static obs %}
+{% block title %}Data manager · Air Quality Observatory{% endblock %}
+{% block content %}
+{% csrf_token %}
+<header class="page-head">
+  <div><h1>Data manager</h1><p>Manage sensor imports and downloadable datasets</p></div>
+  <div class="actions">
+    <button class="btn" id="sync" type="button"{% if not user.is_superuser %} data-login-url="{% url 'login' %}?next={% url 'data' %}"{% endif %}>{% icon "sync" %}Run sync</button>
+    <button class="btn btn-primary" id="import-btn" type="button"{% if not user.is_superuser %} data-login-url="{% url 'login' %}?next={% url 'data' %}"{% endif %}>{% icon "upload" %}Import data</button>
+  </div>
+</header>
+
+<section class="dm-top" aria-label="Summary">
+  <div class="card metric"><div class="metric-icon">{% icon "station" %}</div><div><div class="metric-label">Stations</div><div class="metric-value" id="c-stations">–</div></div></div>
+  <div class="card metric"><div class="metric-icon">{% icon "database" %}</div><div><div class="metric-label">Stored readings</div><div class="metric-value" id="c-readings">–</div></div></div>
+  <div class="card metric last-import">
+    <div class="metric-icon">{% icon "clock" %}</div>
+    <div style="flex:1"><div class="metric-label">Last import</div><div class="metric-value" id="c-last">–</div></div>
+    <span class="divider"></span>
+    <div class="state"><span class="check" id="c-state-icon">{% icon "check" %}</span><span id="c-state">No imports</span></div>
+  </div>
+</section>
+
+<section class="dm-mid">
+  <div class="card" style="padding:6px">
+    <div class="dropzone" id="dropzone">
+      <div>
+        {% icon "cloud" %}
+        <h3>Add sensor records</h3>
+        <p class="muted" style="margin:0 0 14px">Drop a CSV file here or browse files</p>
+        <label class="btn btn-sm" for="file" style="padding:8px 24px">Browse files</label>
+        <input type="file" id="file" accept=".csv,text/csv" class="visually-hidden"{% if not user.is_superuser %} disabled{% endif %}>
+        <p class="small muted" style="margin:12px 0 0">AirCasting exports or <code>station, time, measurement, value</code> [, unit, latitude, longitude]</p>
+      </div>
+    </div>
+  </div>
+  <div class="card card-pad">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+      <h3>Scheduled imports</h3>
+      <button class="switch" id="schedule-toggle" role="switch" aria-checked="{{ schedule.enabled|yesno:'true,false' }}" aria-label="Scheduled imports"></button>
+    </div>
+    <label class="field" style="margin-top:14px"><span class="visually-hidden">Interval</span>
+      <select class="select" id="interval">
+        <option value="5">Every 5 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option>
+        <option value="60">Every hour</option><option value="360">Every 6 hours</option><option value="1440">Once a day</option>
+      </select>
+    </label>
+    <p class="muted" id="next-run" style="margin:10px 0 0">–</p>
+    <p class="small muted" style="margin:6px 0 0">Downloads new AirCasting recordings for the sensors listed below. Requires <code>manage.py run_scheduler</code> running.</p>
+  </div>
+</section>
+
+<section class="card card-pad" aria-labelledby="sensors-title">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+    <h2 id="sensors-title" style="margin:0">Sensors</h2>
+    <a class="btn btn-sm" href="#add-sensor">Add a sensor</a>
+  </div>
+  <p class="muted" style="margin:8px 0 0">Every registered sensor ID, with the period it downloads and how
+    the most recent download went. Adding a sensor starts its first download straight away.</p>
+  <div class="table-wrap" style="margin-top:14px">
+    <table class="data">
+      <thead><tr><th>Sensor</th><th>Station</th><th>Download period</th><th>Readings</th><th>Status</th><th>Last successful download</th></tr></thead>
+      <tbody id="sensor-rows"><tr><td colspan="6" class="muted">Loading&hellip;</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card card-pad" id="add-sensor" aria-labelledby="add-sensor-title" style="margin-top:16px">
+  <h2 id="add-sensor-title">Add a sensor</h2>
+  <p class="muted" style="max-width:74ch">Each sync runs the notebook's downloader for these sensor IDs: it searches the
+    spellings of the ID, adds any known sessions and downloads recordings for the period below. Adding a sensor starts
+    its first download straight away. Use only your project's devices or authorised tags.</p>
+  <form method="post" action="{% url 'device_add' %}" class="form-grid" style="margin:16px 0"{% if not user.is_superuser %} onsubmit="location.href='{% url 'login' %}?next={% url 'data' %}';return false"{% endif %}>
+    {% csrf_token %}
+    <label class="field"><span>Device ID</span><input class="input" name="device_id" required placeholder="AIRBEAM3:B0B21C7627C4"></label>
+    <label class="field"><span>Label</span><input class="input" name="label" placeholder="Office window"></label>
+    <label class="field"><span>Known session IDs</span><input class="input" name="known_session_ids" placeholder="21374"></label>
+    <label class="field"><span>Project tags</span><input class="input" name="project_tags" placeholder="optional"></label>
+    <label class="field"><span>Download from</span><input class="input" type="date" name="download_from" value="2020-01-01" required></label>
+    <label class="field"><span>Download until</span><input class="input" type="date" name="download_until"><span class="small muted">Leave empty for now</span></label>
+    <label class="field wide"><span>Store under station</span>
+      <select class="select" name="station"><option value="">Create or match automatically</option>{% for s in stations %}<option value="{{ s.pk }}">{{ s.name }} · {{ s.code }}</option>{% endfor %}</select></label>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><label><input type="checkbox" name="active" checked> Active</label><button class="btn btn-primary" type="submit">Add sensor</button>
+      <span class="small muted">Downloading starts as soon as you add it, for the period above.</span></div>
+  </form>
+
+  {% if devices %}
+  <div class="table-wrap"><table class="data">
+    <thead><tr><th>Sensor</th><th>Sessions / tags</th><th>Station</th><th>Download period</th><th>Last successful sync</th><th></th></tr></thead>
+    <tbody>{% for d in devices %}<tr>
+      <td><strong>{{ d.device_id }}</strong>{% if d.label %}<div class="small muted">{{ d.label }}</div>{% endif %}{% if not d.active %} <span class="pill">Paused</span>{% endif %}</td>
+      <td>{{ d.known_session_ids|default:"–" }}{% if d.project_tags %}<div class="small muted">{{ d.project_tags }}</div>{% endif %}</td>
+      <td>{{ d.station|default:"Automatic" }}</td>
+      <td class="small">{{ d.download_from|date:"j M Y" }} &ndash; {{ d.download_until|date:"j M Y"|default:"now" }}</td>
+      <td>{{ d.last_success|date:"j M Y, H:i"|default:"Never" }}
+        {% if d.last_error %}<div class="small" style="color:var(--danger,#b42318)">{{ d.last_error|truncatechars:120 }}</div>{% endif %}</td>
+      <td style="white-space:nowrap">
+        <form method="post" action="{% url 'device_test' d.pk %}" style="display:inline"{% if not user.is_superuser %} onsubmit="location.href='{% url 'login' %}?next={% url 'data' %}';return false"{% endif %}>{% csrf_token %}<button class="btn btn-sm">Test access</button></form>
+        <form method="post" action="{% url 'device_delete' d.pk %}" style="display:inline" onsubmit="{% if not user.is_superuser %}location.href='{% url 'login' %}?next={% url 'data' %}';return false{% else %}return confirm('Permanently remove {{ d.device_id|escapejs }}?
+
+Its stations, stored readings, weekly datasets and downloaded AirCasting files are all deleted. This cannot be undone.'){% endif %}">{% csrf_token %}<button class="btn btn-sm btn-danger">Remove</button></form>
+      </td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% endif %}
+
+  {% if test_results %}
+  <h3 style="margin:18px 0 8px">Access test for {{ test_results.device }}</h3>
+  <div class="table-wrap"><table class="data">
+    <thead><tr><th>Query</th><th>Result</th><th>Details</th></tr></thead>
+    <tbody>{% for r in test_results.results %}<tr><td>{{ r.query }}</td><td><span class="status-dot {% if not r.ok %}fail{% endif %}"></span>{{ r.result }}</td><td class="small">{{ r.detail|default:"–" }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% endif %}
+</section>
+
+<section class="card card-pad" id="stations" aria-labelledby="stations-title" style="margin-top:16px">
+  <h2 id="stations-title">Stations</h2>
+  <p class="muted" style="max-width:74ch">Fixed outdoor sessions supply their own coordinates. Indoor sessions have
+    coordinates withheld by AirCasting, so enter a location here to place the station on the map. Manually entered
+    locations are never overwritten by later imports. Deleting a station removes its readings, its weekly datasets and
+    the files behind them; the removal is listed in <a href="{% url 'reports' %}">Update reports</a>.</p>
+  {% for s in stations %}
+  <div class="inline-form" style="padding:10px 0;border-top:1px solid var(--line)">
+    <form method="post" action="{% url 'station_update' s.code %}" class="inline-form" style="flex:1;padding:0;border:0"{% if not user.is_superuser %} onsubmit="location.href='{% url 'login' %}?next={% url 'data' %}';return false"{% endif %}>
+      {% csrf_token %}
+      <div><label class="visually-hidden" for="n-{{ s.pk }}">Name</label><input id="n-{{ s.pk }}" class="input" name="name" value="{{ s.name }}" required style="width:100%">
+        <div class="small muted" style="margin-top:4px">{{ s.code }} · {{ s.reading_count|thousands }} readings · {% if s.has_location %}<span class="pill">{{ s.get_location_source_display }}</span>{% else %}<span class="pill warn">No location</span>{% endif %}{% if s.is_indoor %} <span class="pill">Indoor</span>{% endif %}
+          {% for a in s.aliases.all %}<div title="Source identity">{{ a.key|truncatechars:70 }}</div>{% endfor %}</div></div>
+      <input class="input" name="region" value="{{ s.region }}" aria-label="Region" placeholder="Region">
+      <input class="input" name="latitude" value="{{ s.latitude|default_if_none:'' }}" aria-label="Latitude" placeholder="Latitude" inputmode="decimal">
+      <input class="input" name="longitude" value="{{ s.longitude|default_if_none:'' }}" aria-label="Longitude" placeholder="Longitude" inputmode="decimal">
+      <button class="btn btn-sm" type="submit">Save</button>
+    </form>
+    <form method="post" action="{% url 'station_delete' s.code %}" style="display:inline" onsubmit="{% if not user.is_superuser %}location.href='{% url 'login' %}?next={% url 'data' %}';return false{% else %}return confirm('Permanently delete {{ s.name|escapejs }} ({{ s.code|escapejs }})?\n\n{{ s.reading_count|thousands }} stored readings and every weekly dataset for this station are removed from the database and from disk. This cannot be undone.'){% endif %}">{% csrf_token %}<button class="btn btn-sm btn-danger" type="submit">Delete station</button></form>
+  </div>
+  {% empty %}<p class="muted">No stations yet.</p>{% endfor %}
+</section>
+
+<section class="card card-pad" aria-labelledby="ds-title" style="margin-top:16px">
+  <h2 id="ds-title">Available datasets</h2>
+  <div class="table-tools">
+    <div class="input-icon">{% icon "search" %}<label class="visually-hidden" for="q">Search filenames</label><input id="q" class="input" placeholder="Search filenames…"></div>
+    <label class="visually-hidden" for="region">Region</label>
+    <select id="region" class="select"><option value="">Region: All</option>{% for r in regions %}<option value="{{ r }}"{% if r == default_region %} selected{% endif %}>Region: {{ r }}</option>{% endfor %}</select>
+    <label class="visually-hidden" for="period">Week</label>
+    <select id="period" class="select"><option value="">Date</option></select>
+    <button class="btn btn-quiet" id="download-selected" type="button" disabled>{% icon "download" %}Download selected</button>
+    <button class="btn btn-danger" id="delete-selected" type="button" disabled{% if not user.is_superuser %} data-login-url="{% url 'login' %}?next={% url 'data' %}"{% endif %}>{% icon "trash" %}Delete selected</button>
+  </div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr>
+        <th style="width:48px"><input type="checkbox" id="select-all" aria-label="Select all on this page"></th>
+        <th>Dataset</th><th>Station</th><th>Period</th><th>Readings</th><th>Status</th><th style="text-align:center">Download</th>
+      </tr></thead>
+      <tbody id="rows"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;flex-wrap:wrap;gap:12px">
+    <span class="muted" id="showing"></span>
+    <nav class="pager" id="pager" aria-label="Pages"></nav>
+  </div>
+</section>
+
+<section class="card card-pad" style="margin-top:16px" aria-labelledby="hk-title">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap">
+    <div style="max-width:74ch">
+      <h2 id="hk-title" style="margin:0 0 6px">Stored data not listed above</h2>
+      <p class="muted" style="margin:0">This table is the catalogue of everything the platform holds. Anything else left
+        under the data folder &mdash; reading files for a deleted station, source CSVs nothing is built from any more,
+        downloads cached for an unregistered sensor &mdash; cannot be reached from any page and is removed here.</p>
+    </div>
+    <button class="btn btn-danger" id="purge-orphans" type="button"{% if not user.is_superuser %} data-login-url="{% url 'login' %}?next={% url 'data' %}"{% endif %}>{% icon "trash" %}Check and remove</button>
+  </div>
+  <div id="orphans" class="small muted" style="margin-top:12px">Not checked yet.</div>
+</section>
+
+<section class="card notice" style="margin-top:16px" aria-live="polite" id="notice">
+  <span class="check" id="n-icon">{% icon "check" %}</span>
+  <strong id="n-title">No imports yet</strong>
+  <span class="sep"></span>
+  <span class="muted" id="n-text">Readings are grouped by station, so each station appears once on the map however many recordings it has.</span>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{% static 'observatory/js/data_manager.js' %}"></script>{% endblock %}

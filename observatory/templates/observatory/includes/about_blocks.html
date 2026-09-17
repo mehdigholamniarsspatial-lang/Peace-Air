@@ -1,0 +1,7 @@
+{% load obs %}{% for block in blocks %}
+  {% if block.kind == "paragraph" %}<div class="about-paragraph">{{ block.html }}</div>
+  {% elif block.kind == "list" %}<ul class="about-list">{% for item in block.items %}<li>{{ item }}</li>{% endfor %}</ul>
+  {% elif block.kind == "table" %}<div class="about-stats" role="list">{% for row in block.rows %}<div class="about-stat" role="listitem"><strong>{{ row.1 }}</strong><span>{{ row.0 }}</span></div>{% endfor %}</div>
+  {% elif block.kind == "blockquote" %}<aside class="about-callout" aria-label="Important data note">{% icon "info" %}<div>{{ block.html }}</div></aside>
+  {% endif %}
+{% endfor %}

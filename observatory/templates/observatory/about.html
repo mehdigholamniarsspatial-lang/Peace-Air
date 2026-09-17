@@ -1,0 +1,29 @@
+{% extends "observatory/base.html" %}{% load static obs %}
+{% block title %}About | PEACE-Air WP2 Air Quality Dashboard{% endblock %}
+{% block meta %}<meta name="description" content="Learn about PEACE-Air Work Package 2, its transport-related air pollution research, targets, partners, data and funding.">{% endblock %}
+{% block content %}
+<article class="about-page">
+  <header class="about-hero">
+    <div class="about-hero-logo">
+      <img src="{% static 'observatory/images/peace-air-logo.png' %}" alt="PEACE-Air">
+    </div>
+    <div class="about-kicker">PEACE-Air · Work Package 2</div>
+    <h1>{{ about.title }}</h1>
+    {% for block in about.intro %}{% if block.kind == "paragraph" %}<p>{{ block.html }}</p>{% endif %}{% endfor %}
+  </header>
+
+  {% for section in about.sections %}
+  <section class="about-section about-section--{{ section.slug }}" aria-labelledby="{{ section.slug }}-title">
+    <div class="about-section-head">
+      <div class="about-section-icon">{% if section.slug == "work-package-2-transport-related-air-pollution" %}{% icon "station" %}{% elif section.slug == "about-the-data" %}{% icon "database" %}{% elif section.slug == "funding" %}{% icon "leaf" %}{% else %}{% icon "info" %}{% endif %}</div>
+      <h2 id="{{ section.slug }}-title">{{ section.title }}</h2>
+    </div>
+    <div class="about-content">
+      {% include "observatory/includes/about_blocks.html" with blocks=section.lead_blocks %}
+      {% for group in section.groups %}<div class="about-group about-group--{{ group.slug }}"><h3>{{ group.title }}</h3>{% include "observatory/includes/about_blocks.html" with blocks=group.blocks %}</div>{% endfor %}
+      {% if section.slug == "project-partners" %}<div class="logo-placeholders" aria-label="Partner logo placeholders"><div>Partner logos<br><span>Placeholder</span></div><div>Associate partner logos<br><span>Placeholder</span></div></div>{% endif %}
+    </div>
+  </section>
+  {% endfor %}
+</article>
+{% endblock %}
